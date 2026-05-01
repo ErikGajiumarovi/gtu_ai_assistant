@@ -1,8 +1,8 @@
 package com.gtu.aiassistant.domain.user.model
 
 import arrow.core.Either
-import arrow.core.left
-import arrow.core.right
+import arrow.core.raise.either
+import arrow.core.raise.ensure
 import com.gtu.aiassistant.domain.model.DomainError
 import kotlin.ConsistentCopyVisibility
 
@@ -14,16 +14,16 @@ data class UserEmail private constructor(
         private const val MAX_LENGTH = 320
         private val EMAIL_REGEX = Regex("^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+$")
 
-        fun create(value: String): Either<DomainError, UserEmail> {
-            val normalizedValue = value.trim().lowercase()
+        fun create(value: String): Either<DomainError, UserEmail> =
+            either {
+                val normalizedValue = value.trim().lowercase()
 
-            return when {
-                normalizedValue.isBlank() -> UserEmailError.Blank.left()
-                normalizedValue.length > MAX_LENGTH -> UserEmailError.TooLong.left()
-                !EMAIL_REGEX.matches(normalizedValue) -> UserEmailError.InvalidFormat.left()
-                else -> UserEmail(normalizedValue).right()
+                ensure(normalizedValue.isNotBlank()) { UserEmailError.Blank }
+                ensure(normalizedValue.length <= MAX_LENGTH) { UserEmailError.TooLong }
+                ensure(EMAIL_REGEX.matches(normalizedValue)) { UserEmailError.InvalidFormat }
+
+                UserEmail(normalizedValue)
             }
-        }
 
         fun fromTrusted(value: String): UserEmail =
             UserEmail(value)

@@ -1,8 +1,8 @@
 package com.gtu.aiassistant.domain.user.model
 
 import arrow.core.Either
-import arrow.core.left
-import arrow.core.right
+import arrow.core.raise.either
+import arrow.core.raise.ensure
 import com.gtu.aiassistant.domain.model.AggregateRoot
 import com.gtu.aiassistant.domain.model.DomainError
 
@@ -21,15 +21,16 @@ class User private constructor(
             lastName: UserLastName,
             email: UserEmail
         ): Either<DomainError, User> =
-            when {
-                version < 0L -> UserError.InvalidVersion.left()
-                else -> User(
+            either {
+                ensure(version >= 0L) { UserError.InvalidVersion }
+
+                User(
                     id = id,
                     version = version,
                     name = name,
                     lastName = lastName,
                     email = email
-                ).right()
+                )
             }
 
         fun fromTrusted(

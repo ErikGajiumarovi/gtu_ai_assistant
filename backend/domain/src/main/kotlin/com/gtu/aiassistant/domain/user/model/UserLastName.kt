@@ -1,8 +1,8 @@
 package com.gtu.aiassistant.domain.user.model
 
 import arrow.core.Either
-import arrow.core.left
-import arrow.core.right
+import arrow.core.raise.either
+import arrow.core.raise.ensure
 import com.gtu.aiassistant.domain.model.DomainError
 import kotlin.ConsistentCopyVisibility
 
@@ -13,15 +13,15 @@ data class UserLastName private constructor(
     companion object {
         private const val MAX_LENGTH = 100
 
-        fun create(value: String): Either<DomainError, UserLastName> {
-            val normalizedValue = value.trim()
+        fun create(value: String): Either<DomainError, UserLastName> =
+            either {
+                val normalizedValue = value.trim()
 
-            return when {
-                normalizedValue.isBlank() -> UserLastNameError.Blank.left()
-                normalizedValue.length > MAX_LENGTH -> UserLastNameError.TooLong.left()
-                else -> UserLastName(normalizedValue).right()
+                ensure(normalizedValue.isNotBlank()) { UserLastNameError.Blank }
+                ensure(normalizedValue.length <= MAX_LENGTH) { UserLastNameError.TooLong }
+
+                UserLastName(normalizedValue)
             }
-        }
 
         fun fromTrusted(value: String): UserLastName =
             UserLastName(value)

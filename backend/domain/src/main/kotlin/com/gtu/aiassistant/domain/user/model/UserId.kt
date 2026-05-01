@@ -1,8 +1,7 @@
 package com.gtu.aiassistant.domain.user.model
 
 import arrow.core.Either
-import arrow.core.left
-import arrow.core.right
+import arrow.core.raise.either
 import com.gtu.aiassistant.domain.model.DomainError
 import java.util.UUID
 import kotlin.ConsistentCopyVisibility
@@ -13,14 +12,13 @@ data class UserId private constructor(
 ) {
     companion object {
         fun create(value: String): Either<DomainError, UserId> =
-            try {
-                UserId(UUID.fromString(value)).right()
-            } catch (_: IllegalArgumentException) {
-                UserIdError.InvalidFormat.left()
-            }
+            Either
+                .catch { UUID.fromString(value.trim()) }
+                .map(::UserId)
+                .mapLeft { UserIdError.InvalidFormat }
 
         fun create(value: UUID): Either<DomainError, UserId> =
-            UserId(value).right()
+            either { UserId(value) }
 
         fun fromTrusted(value: UUID): UserId =
             UserId(value)

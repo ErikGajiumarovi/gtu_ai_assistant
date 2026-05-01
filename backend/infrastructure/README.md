@@ -7,6 +7,7 @@
 ## Rules
 
 - implement only `out port` adapters here
+- implement explicit ports like `Find*Port`, `Save*Port`, `Exists*Port`, `Update*Port`; do not reintroduce repositories
 - catch technical exceptions and convert them to `Either.Left(InfrastructureError(cause))`
 - use `fromTrusted(...)` only when reconstructing domain models from trusted persisted data
 - perform blocking IO inside `withContext(Dispatchers.IO)`

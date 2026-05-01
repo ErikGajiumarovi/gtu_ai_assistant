@@ -73,13 +73,18 @@ Backend строится на:
 - `Throwable` никогда не является частью публичного контракта `in ports`
 - `in ports` возвращают ошибки, специфичные для конкретного use case
 - `out ports` возвращают только `InfrastructureError(cause: Throwable)`
+- для работы с `Either` предпочитается Arrow DSL: `either {}`, `ensure`, `bind`, `raise`, `Either.catch`
 
 Базовый контракт:
 
 ```kotlin
-interface UseCase<I, E, O> {
-    suspend operator fun invoke(input: I): Either<E, O>
+fun interface CreateAssistantUseCase {
+    suspend operator fun invoke(command: CreateAssistantCommand): Either<CreateAssistantError, CreateAssistantResult>
 }
+
+data class CreateAssistantCommand(...)
+
+data class CreateAssistantResult(...)
 
 data class InfrastructureError(
     val cause: Throwable
@@ -105,11 +110,17 @@ sealed interface CreateAssistantError {
 }
 
 interface CreateAssistantUseCase {
-    suspend operator fun invoke(command: CreateAssistantCommand): Either<CreateAssistantError, Assistant>
+    suspend operator fun invoke(command: CreateAssistantCommand): Either<CreateAssistantError, CreateAssistantResult>
 }
 
-interface AssistantRepository {
-    suspend fun save(assistant: Assistant): Either<InfrastructureError, Assistant>
+data class CreateAssistantCommand(...)
+
+data class CreateAssistantResult(
+    val assistant: Assistant
+)
+
+fun interface SaveAssistantPort {
+    suspend operator fun invoke(assistant: Assistant): Either<InfrastructureError, Assistant>
 }
 ```
 
@@ -353,10 +364,13 @@ data class AssistantName private constructor(
 ) {
     companion object {
         fun create(value: String): Either<DomainError, AssistantName> =
-            when {
-                value.isBlank() -> Either.Left(AssistantNameError.Blank)
-                value.length > 200 -> Either.Left(AssistantNameError.TooLong)
-                else -> Either.Right(AssistantName(value))
+            either {
+                val normalizedValue = value.trim()
+
+                ensure(normalizedValue.isNotBlank()) { AssistantNameError.Blank }
+                ensure(normalizedValue.length <= 200) { AssistantNameError.TooLong }
+
+                AssistantName(normalizedValue)
             }
 
         fun fromTrusted(value: String): AssistantName =
@@ -403,15 +417,14 @@ class Assistant private constructor(
             name: AssistantName,
             prompt: AssistantPrompt
         ): Either<DomainError, Assistant> =
-            when {
-                version < 0L -> Either.Left(AssistantError.InvalidVersion)
-                else -> Either.Right(
-                    Assistant(
-                        id = id,
-                        version = version,
-                        name = name,
-                        prompt = prompt
-                    )
+            either {
+                ensure(version >= 0L) { AssistantError.InvalidVersion }
+
+                Assistant(
+                    id = id,
+                    version = version,
+                    name = name,
+                    prompt = prompt
                 )
             }
 
@@ -459,6 +472,12 @@ class Assistant private constructor(
 - `in ports` возвращают `Either<UseCaseSpecificError, Result>`
 - `out ports` возвращают `Either<InfrastructureError, Result>`
 - `DomainError` не должен утекать наружу как финальный контракт use case
+- каждый `in port` хранит свой локальный контракт в одном файле:
+  `port + command/query + result + error`
+- для `in ports` по умолчанию предпочитается `fun interface` с `suspend operator fun invoke(...)`
+- `Repository` как паттерн не используется
+- `out ports` моделируются явно: `Find*Port`, `Save*Port`, `Exists*Port`, `Update*Port`
+- каждый `Find*Port` обязан использовать strategy pattern
 
 Связь `DomainError` и `UseCaseError`:
 
@@ -541,8 +560,8 @@ class Assistant private constructor(
 Базовая форма:
 
 ```kotlin
-interface CreateAssistantUseCase {
-    suspend operator fun invoke(command: CreateAssistantCommand): Either<CreateAssistantError, Assistant>
+fun interface CreateAssistantUseCase {
+    suspend operator fun invoke(command: CreateAssistantCommand): Either<CreateAssistantError, CreateAssistantResult>
 }
 ```
 
@@ -578,24 +597,32 @@ interface CreateAssistantUseCase {
 
 ```kotlin
 class CreateAssistantUseCaseImpl(
-    private val assistantRepository: AssistantRepository
+    private val saveAssistantPort: SaveAssistantPort
 ) : CreateAssistantUseCase {
 
     override suspend fun invoke(
         command: CreateAssistantCommand
-    ): Either<CreateAssistantError, Assistant> =
-        Assistant.create(
-            id = command.id,
-            version = 0L,
-            name = command.name,
-            prompt = command.prompt
-        )
-            .mapLeft(CreateAssistantError::InvalidDomainState)
-            .flatMap { assistant ->
-                assistantRepository
-                    .save(assistant)
-                    .mapLeft(CreateAssistantError::PersistenceFailed)
-            }
+    ): Either<CreateAssistantError, CreateAssistantResult> =
+        either {
+            val assistant = Assistant
+                .create(
+                    id = command.id,
+                    version = 0L,
+                    name = command.name,
+                    prompt = command.prompt
+                )
+                .mapLeft(CreateAssistantError::InvalidDomainState)
+                .bind()
+
+            val persistedAssistant = saveAssistantPort
+                .invoke(assistant)
+                .mapLeft(CreateAssistantError::PersistenceFailed)
+                .bind()
+
+            CreateAssistantResult(
+                assistant = persistedAssistant
+            )
+        }
 }
 ```
 
@@ -779,6 +806,7 @@ suspend fun createAssistant(call: ApplicationCall) {
 
 - один use case = один явный `in port`
 - у каждого use case свой `command/query` input и свой error type
+- каждый `in port` хранит свой локальный контракт в одном файле
 - `presentation` не работает напрямую с `infrastructure`
 - `presentation` вызывает только `in ports`
 - `application` работает с `out ports`, а не с конкретными адаптерами
@@ -792,8 +820,8 @@ suspend fun createAssistant(call: ApplicationCall) {
 
 - `...UseCase` для входящих портов
 - `...UseCaseImpl` для реализаций в `application`
-- `...Repository`, `...Client`, `...Publisher` для исходящих портов
-- `...RepositoryImpl`, `...ClientImpl`, `...PublisherImpl` для адаптеров `infrastructure`
+- `Find...Port`, `Save...Port`, `Exists...Port`, `Update...Port`, `...Client`, `...Publisher` для исходящих портов
+- `...ClientImpl`, `...PublisherImpl`, `Find...PortImpl`, `Save...PortImpl`, `Exists...PortImpl`, `Update...PortImpl` для адаптеров `infrastructure`
 - `...Command`, `...Query`, `...Result`, `...Error` для моделей use case уровня
 
 ## Первичная структура backend
@@ -823,12 +851,16 @@ backend/
 Если дальше в работе явно не согласовано иное, считаем обязательными следующие правила:
 
 - `Either` является обязательным контрактом для всех `in/out ports`
+- для `Either` по умолчанию используется Arrow DSL, а не ручной imperative-style `when`
 - `in port` ошибки всегда use-case-specific
 - `out port` ошибки всегда `InfrastructureError`
 - `DomainError` используется только внутри `domain` и при маппинге domain validation -> use case error
 - все value objects имеют `private constructor`, `create(...)` и `fromTrusted(...)`
 - все доменные сущности имеют `private constructor`, `create(...)` и `fromTrusted(...)`
 - каждый агрегат наследуется от `AggregateRoot<ID : Any>` и содержит `id + version`
+- каждый `in port` хранит `port + command/query + result + error` в одном файле
+- `Repository` не используется; вместо него всегда explicit `out ports`
+- каждый `Find*Port` использует strategy pattern
 - `presentation` использует только `in ports` и модели `domain`, но не `out ports`
 - `presentation` использует только `create(...)` для построения доменных типов из request data
 - `presentation` не использует `fromTrusted(...)`
