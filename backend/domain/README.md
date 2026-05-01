@@ -45,3 +45,15 @@ The module already contains the first aggregate:
 - `SaveUserPort`
 - `ExistsUserPort`
 - `UpdateUserPort`
+- `Chat`
+- `ChatId`
+- `Message`
+- `MessageSenderType`
+- `CreateChatWithAgentUseCase`
+- `ContinueChatWithAgentUseCase`
+- `ListChatsUseCase`
+- `DeleteChatUseCase`
+- `FindChatPort`
+- `SaveChatPort`
+- `DeleteChatPort`
+- `GenerateMessagePort`
