@@ -19,3 +19,6 @@
 - `project(:backend:application)`
 - `arrow-core`
 - `ktor-server-core`
+- `ktor-server-content-negotiation`
+- `ktor-serialization-kotlinx-json`
+- `kotlinx-serialization-json`

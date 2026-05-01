@@ -10,6 +10,7 @@
 - no domain rules or use case orchestration
 - assemble `presentation`, `application`, `infrastructure`, and `domain`
 - configure Koin and server startup in this module
+- temporary non-persistent or non-AI bootstrap adapters may live here when needed to make the app runnable
 
 ## Dependencies
 

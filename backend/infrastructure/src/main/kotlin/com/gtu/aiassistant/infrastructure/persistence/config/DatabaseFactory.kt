@@ -1,5 +1,7 @@
 package com.gtu.aiassistant.infrastructure.persistence.config
 
+import com.gtu.aiassistant.infrastructure.persistence.schema.PersistenceSchema
+import com.gtu.aiassistant.infrastructure.persistence.support.JdbcPersistenceExecutor
 import org.jetbrains.exposed.v1.jdbc.Database
 
 object DatabaseFactory {
@@ -10,4 +12,11 @@ object DatabaseFactory {
             password = config.password,
             driver = config.driverClassName
         )
+
+    fun createJdbcPersistenceExecutor(config: PersistenceConfig): JdbcPersistenceExecutor {
+        val database = connect(config)
+        PersistenceSchema.create(database)
+
+        return JdbcPersistenceExecutor(database)
+    }
 }

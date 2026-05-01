@@ -17,6 +17,7 @@ dependencies {
     implementation(project(":backend:presentation"))
     implementation(project(":backend:infrastructure"))
 
+    implementation(libs.arrow.core)
     implementation(libs.koin.core)
     implementation(libs.ktor.server.core)
     implementation(libs.ktor.server.netty)
