@@ -150,9 +150,13 @@ private data class RuntimeConfig(
                 host = System.getenv("APP_HOST") ?: "0.0.0.0",
                 port = (System.getenv("APP_PORT") ?: "8080").toInt(),
                 aiMode = AiMode.from(System.getenv("APP_AI_MODE")),
-                aiApiKey = System.getenv("APP_AI_API_KEY") ?: System.getenv("OPENAI_API_KEY"),
-                aiBaseUrl = System.getenv("APP_AI_BASE_URL") ?: System.getenv("OPENAI_BASE_URL") ?: "https://api.openai.com",
-                aiModel = System.getenv("APP_AI_MODEL") ?: "gpt-4.1-mini",
+                aiApiKey = System.getenv("APP_AI_API_KEY")
+                    ?: System.getenv("OPENAI_API_KEY")
+                    ?: AiConfig.DEFAULT_OLLAMA_API_KEY,
+                aiBaseUrl = System.getenv("APP_AI_BASE_URL")
+                    ?: System.getenv("OPENAI_BASE_URL")
+                    ?: AiConfig.DEFAULT_OLLAMA_OPENAI_BASE_URL,
+                aiModel = System.getenv("APP_AI_MODEL") ?: AiConfig.GPT_OSS_20B,
                 persistenceMode = PersistenceMode.from(System.getenv("APP_PERSISTENCE_MODE")),
                 jdbcUrl = System.getenv("APP_DB_JDBC_URL") ?: "jdbc:postgresql://localhost:5432/gtu_ai_assistant",
                 jdbcUsername = System.getenv("APP_DB_USERNAME") ?: "postgres",
@@ -168,8 +172,9 @@ private enum class AiMode {
     companion object {
         fun from(raw: String?): AiMode =
             when (raw?.lowercase()) {
+                "memory" -> MEMORY
                 "openai" -> OPENAI
-                else -> MEMORY
+                else -> OPENAI
             }
     }
 }

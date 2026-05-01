@@ -18,4 +18,10 @@ dependencies {
     implementation(libs.exposed.java.time)
     implementation(libs.postgresql)
     implementation(libs.koog.agents)
+
+    testImplementation(kotlin("test"))
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
