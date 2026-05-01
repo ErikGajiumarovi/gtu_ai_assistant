@@ -13,7 +13,7 @@
 - perform blocking IO inside `withContext(Dispatchers.IO)`
 - do not expose SQL, HTTP, or SDK-specific models outside the adapter boundary
 - persist `Chat` through relational records, with `chat_messages` stored separately from `chats`
-- `GenerateMessagePort` is not part of persistence and should stay outside this area for now
+- AI adapters such as `GenerateMessagePort` also live here, but remain separate from persistence code
 
 ## Dependencies
 

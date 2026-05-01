@@ -5,6 +5,8 @@ import com.gtu.aiassistant.application.chat.CreateChatWithAgentUseCaseImpl
 import com.gtu.aiassistant.application.chat.DeleteChatUseCaseImpl
 import com.gtu.aiassistant.application.chat.ListChatsUseCaseImpl
 import com.gtu.aiassistant.application.user.CreateUserUseCaseImpl
+import com.gtu.aiassistant.infrastructure.ai.AiConfig
+import com.gtu.aiassistant.infrastructure.ai.GenerateMessagePortImpl
 import com.gtu.aiassistant.app.memory.InMemoryDeleteChatPort
 import com.gtu.aiassistant.app.memory.InMemoryExistsUserPort
 import com.gtu.aiassistant.app.memory.InMemoryFindChatPort
@@ -70,7 +72,23 @@ fun main() {
 private fun appModule(
     runtimeConfig: RuntimeConfig
 ) = module {
-    single<GenerateMessagePort> { InMemoryGenerateMessagePort() }
+    when (runtimeConfig.aiMode) {
+        AiMode.MEMORY -> {
+            single<GenerateMessagePort> { InMemoryGenerateMessagePort() }
+        }
+
+        AiMode.OPENAI -> {
+            single {
+                AiConfig(
+                    apiKey = runtimeConfig.aiApiKey
+                        ?: error("APP_AI_API_KEY or OPENAI_API_KEY must be set when APP_AI_MODE=openai"),
+                    baseUrl = runtimeConfig.aiBaseUrl,
+                    model = runtimeConfig.aiModel
+                )
+            }
+            single<GenerateMessagePort> { GenerateMessagePortImpl.create(get()) }
+        }
+    }
 
     when (runtimeConfig.persistenceMode) {
         PersistenceMode.MEMORY -> {
@@ -117,6 +135,10 @@ private fun appModule(
 private data class RuntimeConfig(
     val host: String,
     val port: Int,
+    val aiMode: AiMode,
+    val aiApiKey: String?,
+    val aiBaseUrl: String,
+    val aiModel: String,
     val persistenceMode: PersistenceMode,
     val jdbcUrl: String,
     val jdbcUsername: String,
@@ -127,11 +149,28 @@ private data class RuntimeConfig(
             RuntimeConfig(
                 host = System.getenv("APP_HOST") ?: "0.0.0.0",
                 port = (System.getenv("APP_PORT") ?: "8080").toInt(),
+                aiMode = AiMode.from(System.getenv("APP_AI_MODE")),
+                aiApiKey = System.getenv("APP_AI_API_KEY") ?: System.getenv("OPENAI_API_KEY"),
+                aiBaseUrl = System.getenv("APP_AI_BASE_URL") ?: System.getenv("OPENAI_BASE_URL") ?: "https://api.openai.com",
+                aiModel = System.getenv("APP_AI_MODEL") ?: "gpt-4.1-mini",
                 persistenceMode = PersistenceMode.from(System.getenv("APP_PERSISTENCE_MODE")),
                 jdbcUrl = System.getenv("APP_DB_JDBC_URL") ?: "jdbc:postgresql://localhost:5432/gtu_ai_assistant",
                 jdbcUsername = System.getenv("APP_DB_USERNAME") ?: "postgres",
                 jdbcPassword = System.getenv("APP_DB_PASSWORD") ?: "postgres"
             )
+    }
+}
+
+private enum class AiMode {
+    MEMORY,
+    OPENAI;
+
+    companion object {
+        fun from(raw: String?): AiMode =
+            when (raw?.lowercase()) {
+                "openai" -> OPENAI
+                else -> MEMORY
+            }
     }
 }
 
