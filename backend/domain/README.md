@@ -25,3 +25,15 @@
 ## Dependencies
 
 - `arrow-core`
+
+## Current scope
+
+The module already contains the first aggregate:
+
+- `User`
+- `UserId`
+- `UserName`
+- `UserLastName`
+- `UserEmail`
+- `CreateUserUseCase`
+- `UserRepository`
