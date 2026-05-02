@@ -785,6 +785,7 @@ function App() {
                     {selectedChat ? (
                       selectedChat.messages.map((message) => {
                         const isUser = message.senderType === "USER";
+                        const citations = message.citations ?? [];
 
                         return (
                           <article
@@ -809,9 +810,9 @@ function App() {
                               <p className="text-sm leading-7 whitespace-pre-wrap sm:text-[15px]">
                                 {message.originalText}
                               </p>
-                              {!isUser && message.citations.length > 0 ? (
+                              {!isUser && citations.length > 0 ? (
                                 <div className="mt-4 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
-                                  {message.citations.map((citation) => (
+                                  {citations.map((citation) => (
                                     <a
                                       key={`${message.id}-${citation.url}`}
                                       href={citation.url}

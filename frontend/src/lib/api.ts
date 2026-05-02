@@ -51,7 +51,7 @@ export type MessageResponse = {
   originalText: string;
   senderType: "USER" | "AI";
   createdAt: string;
-  citations: CitationResponse[];
+  citations?: CitationResponse[];
 };
 
 export type ChatResponse = {
