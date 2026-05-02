@@ -8,6 +8,8 @@ exposed = "1.1.1"
 postgresql = "42.7.11"
 koog = "0.6.2"
 serialization = "1.9.0"
+argon2 = "2.12"
+java-jwt = "4.5.0"
 
 [libraries]
 arrow-core = { module = "io.arrow-kt:arrow-core", version.ref = "arrow" }
@@ -15,6 +17,9 @@ coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm"
 ktor-server-core = { module = "io.ktor:ktor-server-core", version.ref = "ktor" }
 ktor-server-netty = { module = "io.ktor:ktor-server-netty", version.ref = "ktor" }
 ktor-server-content-negotiation = { module = "io.ktor:ktor-server-content-negotiation", version.ref = "ktor" }
+ktor-server-auth = { module = "io.ktor:ktor-server-auth", version.ref = "ktor" }
+ktor-server-auth-jwt = { module = "io.ktor:ktor-server-auth-jwt", version.ref = "ktor" }
+ktor-server-test-host = { module = "io.ktor:ktor-server-test-host", version.ref = "ktor" }
 ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
 ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
 ktor-client-cio = { module = "io.ktor:ktor-client-cio", version.ref = "ktor" }
@@ -25,6 +30,8 @@ exposed-java-time = { module = "org.jetbrains.exposed:exposed-java-time", versio
 postgresql = { module = "org.postgresql:postgresql", version.ref = "postgresql" }
 koog-agents = { module = "ai.koog:koog-agents", version.ref = "koog" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+argon2-jvm = { module = "de.mkammerer:argon2-jvm", version.ref = "argon2" }
+java-jwt = { module = "com.auth0:java-jwt", version.ref = "java-jwt" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

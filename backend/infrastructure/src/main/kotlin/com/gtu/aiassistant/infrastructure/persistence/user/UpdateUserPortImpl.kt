@@ -20,6 +20,7 @@ class UpdateUserPortImpl(
                 it[UserRecords.name] = user.name.value
                 it[UserRecords.lastName] = user.lastName.value
                 it[UserRecords.email] = user.email.value
+                it[UserRecords.passwordHash] = user.passwordHash.value
             }
 
             check(updatedRows == 1) {

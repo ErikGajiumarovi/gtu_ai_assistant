@@ -18,6 +18,8 @@ dependencies {
     implementation(libs.exposed.java.time)
     implementation(libs.postgresql)
     implementation(libs.koog.agents)
+    implementation(libs.argon2.jvm)
+    implementation(libs.java.jwt)
 
     testImplementation(kotlin("test"))
 }

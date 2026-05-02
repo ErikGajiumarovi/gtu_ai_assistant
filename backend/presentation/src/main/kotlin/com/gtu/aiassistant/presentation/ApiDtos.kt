@@ -4,22 +4,31 @@ import com.gtu.aiassistant.domain.model.DomainError
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class CreateUserRequest(
-    val id: String,
+data class RegisterUserRequest(
     val name: String,
     val lastName: String,
-    val email: String
+    val email: String,
+    val password: String
+)
+
+@Serializable
+data class LoginInRequest(
+    val email: String,
+    val password: String
+)
+
+@Serializable
+data class LoginInResponse(
+    val jwt: String
 )
 
 @Serializable
 data class CreateChatWithAgentRequest(
-    val userId: String,
     val originalText: String
 )
 
 @Serializable
 data class ContinueChatWithAgentRequest(
-    val userId: String,
     val originalText: String
 )
 

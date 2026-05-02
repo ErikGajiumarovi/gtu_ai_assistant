@@ -1,17 +1,18 @@
 package com.gtu.aiassistant.presentation
 
-import arrow.core.Either
 import arrow.core.raise.either
 import com.gtu.aiassistant.domain.chat.model.ChatId
 import com.gtu.aiassistant.domain.chat.model.Message
 import com.gtu.aiassistant.domain.chat.model.MessageSenderType
 import com.gtu.aiassistant.domain.user.model.UserEmail
-import com.gtu.aiassistant.domain.user.model.UserId
 import com.gtu.aiassistant.domain.user.model.UserLastName
 import com.gtu.aiassistant.domain.user.model.UserName
+import com.gtu.aiassistant.domain.user.model.UserPassword
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.application.call
+import io.ktor.server.auth.authenticate
+import io.ktor.server.auth.principal
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.routing.delete
@@ -27,224 +28,197 @@ internal fun Application.configureRoutes(
 ) {
     routing {
         get("/health") {
-            call.respond(
-                HealthResponse(status = "ok")
-            )
+            call.respond(HealthResponse(status = "ok"))
         }
 
         route("/api") {
-            post("/users") {
-                val request = call.receive<CreateUserRequest>()
+            route("/auth") {
+                post("/register") {
+                    val request = call.receive<RegisterUserRequest>()
 
-                either {
-                    val command = com.gtu.aiassistant.domain.user.port.input.CreateUserCommand(
-                        id = UserId.create(request.id).bind(),
-                        name = UserName.create(request.name).bind(),
-                        lastName = UserLastName.create(request.lastName).bind(),
-                        email = UserEmail.create(request.email).bind()
-                    )
-
-                    command
-                }.fold(
-                    ifLeft = { domainError ->
-                        call.respond(
-                            HttpStatusCode.BadRequest,
-                            ApiErrorResponse.fromDomainError(domainError)
+                    either {
+                        com.gtu.aiassistant.domain.user.port.input.RegisterUserCommand(
+                            name = UserName.create(request.name).bind(),
+                            lastName = UserLastName.create(request.lastName).bind(),
+                            email = UserEmail.create(request.email).bind(),
+                            password = UserPassword.create(request.password).bind()
                         )
-                    },
-                    ifRight = { command ->
-                        dependencies.createUserUseCase(command).fold(
-                            ifLeft = { error ->
-                                call.respond(
-                                    error.statusCode(),
-                                    ApiErrorResponse.fromUseCaseError(error)
-                                )
-                            },
-                            ifRight = { result ->
-                                call.respond(
-                                    HttpStatusCode.Created,
-                                    result.user.toResponse()
-                                )
-                            }
-                        )
-                    }
-                )
-            }
-
-            post("/chats/with-agent") {
-                val request = call.receive<CreateChatWithAgentRequest>()
-
-                either {
-                    val command = com.gtu.aiassistant.domain.chat.port.input.CreateChatWithAgentCommand(
-                        userId = UserId.create(request.userId).bind(),
-                        message = request.toUserMessage()
-                    )
-
-                    command
-                }.fold(
-                    ifLeft = { domainError ->
-                        call.respond(
-                            HttpStatusCode.BadRequest,
-                            ApiErrorResponse.fromDomainError(domainError)
-                        )
-                    },
-                    ifRight = { command ->
-                        dependencies.createChatWithAgentUseCase(command).fold(
-                            ifLeft = { error ->
-                                call.respond(
-                                    error.statusCode(),
-                                    ApiErrorResponse.fromUseCaseError(error)
-                                )
-                            },
-                            ifRight = { result ->
-                                call.respond(
-                                    HttpStatusCode.Created,
-                                    result.chat.toResponse()
-                                )
-                            }
-                        )
-                    }
-                )
-            }
-
-            post("/chats/{chatId}/continue") {
-                val chatIdRaw = call.parameters["chatId"]
-                val request = call.receive<ContinueChatWithAgentRequest>()
-
-                if (chatIdRaw == null) {
-                    call.respond(
-                        HttpStatusCode.BadRequest,
-                        ApiErrorResponse(
-                            code = "missing_chat_id",
-                            message = "Path parameter 'chatId' is required"
-                        )
-                    )
-                    return@post
-                }
-
-                either {
-                    val command = com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentCommand(
-                        chatId = ChatId.create(chatIdRaw).bind(),
-                        userId = UserId.create(request.userId).bind(),
-                        message = request.toUserMessage()
-                    )
-
-                    command
-                }.fold(
-                    ifLeft = { domainError ->
-                        call.respond(
-                            HttpStatusCode.BadRequest,
-                            ApiErrorResponse.fromDomainError(domainError)
-                        )
-                    },
-                    ifRight = { command ->
-                        dependencies.continueChatWithAgentUseCase(command).fold(
-                            ifLeft = { error ->
-                                call.respond(
-                                    error.statusCode(),
-                                    ApiErrorResponse.fromUseCaseError(error)
-                                )
-                            },
-                            ifRight = { result ->
-                                call.respond(
-                                    HttpStatusCode.OK,
-                                    result.chat.toResponse()
-                                )
-                            }
-                        )
-                    }
-                )
-            }
-
-            get("/users/{userId}/chats") {
-                val userIdRaw = call.parameters["userId"]
-
-                if (userIdRaw == null) {
-                    call.respond(
-                        HttpStatusCode.BadRequest,
-                        ApiErrorResponse(
-                            code = "missing_user_id",
-                            message = "Path parameter 'userId' is required"
-                        )
-                    )
-                    return@get
-                }
-
-                UserId.create(userIdRaw).fold(
-                    ifLeft = { domainError ->
-                        call.respond(
-                            HttpStatusCode.BadRequest,
-                            ApiErrorResponse.fromDomainError(domainError)
-                        )
-                    },
-                    ifRight = { userId ->
-                        dependencies.listChatsUseCase(
-                            com.gtu.aiassistant.domain.chat.port.input.ListChatsQuery(
-                                userId = userId
+                    }.fold(
+                        ifLeft = { domainError ->
+                            call.respond(HttpStatusCode.BadRequest, ApiErrorResponse.fromDomainError(domainError))
+                        },
+                        ifRight = { command ->
+                            dependencies.registerUserUseCase(command).fold(
+                                ifLeft = { error ->
+                                    call.respond(error.statusCode(), ApiErrorResponse.fromUseCaseError(error))
+                                },
+                                ifRight = { result ->
+                                    call.respond(HttpStatusCode.Created, result.user.toResponse())
+                                }
                             )
-                        ).fold(
-                            ifLeft = { error ->
-                                call.respond(
-                                    error.statusCode(),
-                                    ApiErrorResponse.fromUseCaseError(error)
-                                )
-                            },
-                            ifRight = { result ->
-                                call.respond(
-                                    HttpStatusCode.OK,
-                                    ListChatsResponse(
-                                        chats = result.chats.map { it.toResponse() }
-                                    )
-                                )
-                            }
-                        )
-                    }
-                )
-            }
-
-            delete("/users/{userId}/chats/{chatId}") {
-                val userIdRaw = call.parameters["userId"]
-                val chatIdRaw = call.parameters["chatId"]
-
-                if (userIdRaw == null || chatIdRaw == null) {
-                    call.respond(
-                        HttpStatusCode.BadRequest,
-                        ApiErrorResponse(
-                            code = "missing_path_parameter",
-                            message = "Path parameters 'userId' and 'chatId' are required"
-                        )
+                        }
                     )
-                    return@delete
                 }
 
-                either {
-                    val command = com.gtu.aiassistant.domain.chat.port.input.DeleteChatCommand(
-                        userId = UserId.create(userIdRaw).bind(),
-                        chatId = ChatId.create(chatIdRaw).bind()
-                    )
+                post("/login") {
+                    val request = call.receive<LoginInRequest>()
 
-                    command
-                }.fold(
-                    ifLeft = { domainError ->
+                    either {
+                        com.gtu.aiassistant.domain.user.port.input.LoginInCommand(
+                            email = UserEmail.create(request.email).bind(),
+                            password = UserPassword.create(request.password).bind()
+                        )
+                    }.fold(
+                        ifLeft = { domainError ->
+                            call.respond(HttpStatusCode.BadRequest, ApiErrorResponse.fromDomainError(domainError))
+                        },
+                        ifRight = { command ->
+                            dependencies.loginInUseCase(command).fold(
+                                ifLeft = { error ->
+                                    call.respond(error.statusCode(), ApiErrorResponse.fromUseCaseError(error))
+                                },
+                                ifRight = { result ->
+                                    call.respond(HttpStatusCode.OK, LoginInResponse(jwt = result.jwt))
+                                }
+                            )
+                        }
+                    )
+                }
+            }
+
+            authenticate("auth-jwt") {
+                post("/chats/with-agent") {
+                    val request = call.receive<CreateChatWithAgentRequest>()
+                    val principal = call.principal<AuthenticatedUserPrincipal>()
+
+                    if (principal == null) {
+                        call.respond(HttpStatusCode.Unauthorized, unauthorizedResponse())
+                        return@post
+                    }
+
+                    dependencies.createChatWithAgentUseCase(
+                        com.gtu.aiassistant.domain.chat.port.input.CreateChatWithAgentCommand(
+                            userId = principal.userId,
+                            message = request.toUserMessage()
+                        )
+                    ).fold(
+                        ifLeft = { error ->
+                            call.respond(error.statusCode(), ApiErrorResponse.fromUseCaseError(error))
+                        },
+                        ifRight = { result ->
+                            call.respond(HttpStatusCode.Created, result.chat.toResponse())
+                        }
+                    )
+                }
+
+                post("/chats/{chatId}/continue") {
+                    val chatIdRaw = call.parameters["chatId"]
+                    val request = call.receive<ContinueChatWithAgentRequest>()
+                    val principal = call.principal<AuthenticatedUserPrincipal>()
+
+                    if (principal == null) {
+                        call.respond(HttpStatusCode.Unauthorized, unauthorizedResponse())
+                        return@post
+                    }
+
+                    if (chatIdRaw == null) {
                         call.respond(
                             HttpStatusCode.BadRequest,
-                            ApiErrorResponse.fromDomainError(domainError)
+                            ApiErrorResponse(
+                                code = "missing_chat_id",
+                                message = "Path parameter 'chatId' is required"
+                            )
                         )
-                    },
-                    ifRight = { command ->
-                        dependencies.deleteChatUseCase(command).fold(
-                            ifLeft = { error ->
-                                call.respond(
-                                    error.statusCode(),
-                                    ApiErrorResponse.fromUseCaseError(error)
-                                )
-                            },
-                            ifRight = {
-                                call.respond(HttpStatusCode.OK, DeleteChatResponse(deleted = true))
-                            }
-                        )
+                        return@post
                     }
-                )
+
+                    either {
+                        com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentCommand(
+                            chatId = ChatId.create(chatIdRaw).bind(),
+                            userId = principal.userId,
+                            message = request.toUserMessage()
+                        )
+                    }.fold(
+                        ifLeft = { domainError ->
+                            call.respond(HttpStatusCode.BadRequest, ApiErrorResponse.fromDomainError(domainError))
+                        },
+                        ifRight = { command ->
+                            dependencies.continueChatWithAgentUseCase(command).fold(
+                                ifLeft = { error ->
+                                    call.respond(error.statusCode(), ApiErrorResponse.fromUseCaseError(error))
+                                },
+                                ifRight = { result ->
+                                    call.respond(HttpStatusCode.OK, result.chat.toResponse())
+                                }
+                            )
+                        }
+                    )
+                }
+
+                get("/chats") {
+                    val principal = call.principal<AuthenticatedUserPrincipal>()
+
+                    if (principal == null) {
+                        call.respond(HttpStatusCode.Unauthorized, unauthorizedResponse())
+                        return@get
+                    }
+
+                    dependencies.listChatsUseCase(
+                        com.gtu.aiassistant.domain.chat.port.input.ListChatsQuery(userId = principal.userId)
+                    ).fold(
+                        ifLeft = { error ->
+                            call.respond(error.statusCode(), ApiErrorResponse.fromUseCaseError(error))
+                        },
+                        ifRight = { result ->
+                            call.respond(
+                                HttpStatusCode.OK,
+                                ListChatsResponse(chats = result.chats.map { it.toResponse() })
+                            )
+                        }
+                    )
+                }
+
+                delete("/chats/{chatId}") {
+                    val chatIdRaw = call.parameters["chatId"]
+                    val principal = call.principal<AuthenticatedUserPrincipal>()
+
+                    if (principal == null) {
+                        call.respond(HttpStatusCode.Unauthorized, unauthorizedResponse())
+                        return@delete
+                    }
+
+                    if (chatIdRaw == null) {
+                        call.respond(
+                            HttpStatusCode.BadRequest,
+                            ApiErrorResponse(
+                                code = "missing_chat_id",
+                                message = "Path parameter 'chatId' is required"
+                            )
+                        )
+                        return@delete
+                    }
+
+                    either {
+                        com.gtu.aiassistant.domain.chat.port.input.DeleteChatCommand(
+                            userId = principal.userId,
+                            chatId = ChatId.create(chatIdRaw).bind()
+                        )
+                    }.fold(
+                        ifLeft = { domainError ->
+                            call.respond(HttpStatusCode.BadRequest, ApiErrorResponse.fromDomainError(domainError))
+                        },
+                        ifRight = { command ->
+                            dependencies.deleteChatUseCase(command).fold(
+                                ifLeft = { error ->
+                                    call.respond(error.statusCode(), ApiErrorResponse.fromUseCaseError(error))
+                                },
+                                ifRight = {
+                                    call.respond(HttpStatusCode.OK, DeleteChatResponse(deleted = true))
+                                }
+                            )
+                        }
+                    )
+                }
             }
         }
     }
@@ -292,10 +266,21 @@ private fun com.gtu.aiassistant.domain.chat.model.Chat.toResponse(): ChatRespons
         }
     )
 
-private fun com.gtu.aiassistant.domain.user.port.input.CreateUserError.statusCode(): HttpStatusCode =
+private fun com.gtu.aiassistant.domain.user.port.input.RegisterUserError.statusCode(): HttpStatusCode =
     when (this) {
-        is com.gtu.aiassistant.domain.user.port.input.CreateUserError.InvalidDomainState -> HttpStatusCode.BadRequest
-        is com.gtu.aiassistant.domain.user.port.input.CreateUserError.PersistenceFailed -> HttpStatusCode.InternalServerError
+        com.gtu.aiassistant.domain.user.port.input.RegisterUserError.EmailAlreadyTaken -> HttpStatusCode.Conflict
+        is com.gtu.aiassistant.domain.user.port.input.RegisterUserError.InvalidDomainState -> HttpStatusCode.BadRequest
+        is com.gtu.aiassistant.domain.user.port.input.RegisterUserError.DuplicateCheckFailed -> HttpStatusCode.InternalServerError
+        is com.gtu.aiassistant.domain.user.port.input.RegisterUserError.PasswordHashingFailed -> HttpStatusCode.InternalServerError
+        is com.gtu.aiassistant.domain.user.port.input.RegisterUserError.PersistenceFailed -> HttpStatusCode.InternalServerError
+    }
+
+private fun com.gtu.aiassistant.domain.user.port.input.LoginInError.statusCode(): HttpStatusCode =
+    when (this) {
+        com.gtu.aiassistant.domain.user.port.input.LoginInError.InvalidCredentials -> HttpStatusCode.Unauthorized
+        is com.gtu.aiassistant.domain.user.port.input.LoginInError.FindFailed -> HttpStatusCode.InternalServerError
+        is com.gtu.aiassistant.domain.user.port.input.LoginInError.PasswordVerificationFailed -> HttpStatusCode.InternalServerError
+        is com.gtu.aiassistant.domain.user.port.input.LoginInError.JwtIssuingFailed -> HttpStatusCode.InternalServerError
     }
 
 private fun com.gtu.aiassistant.domain.chat.port.input.CreateChatWithAgentError.statusCode(): HttpStatusCode =
@@ -331,4 +316,10 @@ private fun ApiErrorResponse.Companion.fromUseCaseError(error: Any): ApiErrorRes
     ApiErrorResponse(
         code = error::class.simpleName ?: "use_case_error",
         message = error.toString()
+    )
+
+private fun unauthorizedResponse(): ApiErrorResponse =
+    ApiErrorResponse(
+        code = "unauthorized",
+        message = "Missing or invalid bearer token"
     )

@@ -9,4 +9,5 @@ internal object UserRecords {
     val name = table.name
     val lastName = table.lastName
     val email = table.email
+    val passwordHash = table.passwordHash
 }

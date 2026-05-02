@@ -11,7 +11,8 @@ class User private constructor(
     override val version: Long,
     val name: UserName,
     val lastName: UserLastName,
-    val email: UserEmail
+    val email: UserEmail,
+    val passwordHash: UserPasswordHash
 ) : AggregateRoot<UserId>(id, version) {
     companion object {
         fun create(
@@ -19,7 +20,8 @@ class User private constructor(
             version: Long,
             name: UserName,
             lastName: UserLastName,
-            email: UserEmail
+            email: UserEmail,
+            passwordHash: UserPasswordHash
         ): Either<DomainError, User> =
             either {
                 ensure(version >= 0L) { UserError.InvalidVersion }
@@ -29,7 +31,8 @@ class User private constructor(
                     version = version,
                     name = name,
                     lastName = lastName,
-                    email = email
+                    email = email,
+                    passwordHash = passwordHash
                 )
             }
 
@@ -38,14 +41,16 @@ class User private constructor(
             version: Long,
             name: UserName,
             lastName: UserLastName,
-            email: UserEmail
+            email: UserEmail,
+            passwordHash: UserPasswordHash
         ): User =
             User(
                 id = id,
                 version = version,
                 name = name,
                 lastName = lastName,
-                email = email
+                email = email,
+                passwordHash = passwordHash
             )
     }
 }

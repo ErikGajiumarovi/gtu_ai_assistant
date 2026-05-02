@@ -7,11 +7,20 @@ export type ApiErrorResponse = {
   message: string;
 };
 
-export type CreateUserRequest = {
-  id: string;
+export type RegisterUserRequest = {
   name: string;
   lastName: string;
   email: string;
+  password: string;
+};
+
+export type LoginInRequest = {
+  email: string;
+  password: string;
+};
+
+export type LoginInResponse = {
+  jwt: string;
 };
 
 export type UserResponse = {
@@ -23,12 +32,10 @@ export type UserResponse = {
 };
 
 export type CreateChatWithAgentRequest = {
-  userId: string;
   originalText: string;
 };
 
 export type ContinueChatWithAgentRequest = {
-  userId: string;
   originalText: string;
 };
 
@@ -73,14 +80,27 @@ export class ApiClientError extends Error {
 }
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
+let authToken: string | null = null;
+
+export function setAuthToken(token: string | null) {
+  authToken = token;
+}
+
+export function clearAuthToken() {
+  authToken = null;
+}
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const headers = new Headers(options.headers ?? {});
+  headers.set("Content-Type", "application/json");
+
+  if (authToken) {
+    headers.set("Authorization", `Bearer ${authToken}`);
+  }
+
   const response = await fetch(`${apiBaseUrl}${path}`, {
     ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers ?? {}),
-    },
+    headers,
   });
 
   if (!response.ok) {
@@ -109,8 +129,15 @@ export function checkHealth(): Promise<HealthResponse> {
   return request<HealthResponse>("/health", { method: "GET" });
 }
 
-export function createUser(payload: CreateUserRequest): Promise<UserResponse> {
-  return request<UserResponse>("/api/users", {
+export function registerUser(payload: RegisterUserRequest): Promise<UserResponse> {
+  return request<UserResponse>("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function loginIn(payload: LoginInRequest): Promise<LoginInResponse> {
+  return request<LoginInResponse>("/api/auth/login", {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -133,16 +160,16 @@ export function continueChatWithAgent(
   });
 }
 
-export async function listChats(userId: string): Promise<ChatResponse[]> {
-  const result = await request<ListChatsResponse>(`/api/users/${userId}/chats`, {
+export async function listChats(): Promise<ChatResponse[]> {
+  const result = await request<ListChatsResponse>("/api/chats", {
     method: "GET",
   });
 
   return result.chats;
 }
 
-export function deleteChat(userId: string, chatId: string): Promise<DeleteChatResponse> {
-  return request<DeleteChatResponse>(`/api/users/${userId}/chats/${chatId}`, {
+export function deleteChat(chatId: string): Promise<DeleteChatResponse> {
+  return request<DeleteChatResponse>(`/api/chats/${chatId}`, {
     method: "DELETE",
   });
 }
