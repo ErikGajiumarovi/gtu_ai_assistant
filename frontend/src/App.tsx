@@ -1,15 +1,11 @@
 import {
   Activity,
-  Bot,
   LogIn,
   LogOut,
-  MessageSquareText,
   RefreshCw,
   Search,
   Send,
-  ShieldCheck,
   Sparkles,
-  Trash2,
   UserRoundPlus,
 } from "lucide-react";
 import { useDeferredValue, useEffect, useRef, useState } from "react";
@@ -17,10 +13,8 @@ import {
   ApiClientError,
   clearAuthToken,
   type ChatResponse,
-  checkHealth,
   continueChatWithAgent,
   createChatWithAgent,
-  deleteChat,
   listChats,
   loginIn,
   registerUser,
@@ -34,7 +28,6 @@ type Notice = {
   detail: string;
 };
 
-type HealthState = "idle" | "online" | "offline" | "checking";
 type AuthMode = "login" | "register";
 
 type RegistrationDraft = {
@@ -58,7 +51,6 @@ const SESSION_STORAGE_KEY = "gtu-ai-assistant.session";
 
 function App() {
   const [authMode, setAuthMode] = useState<AuthMode>("login");
-  const [health, setHealth] = useState<HealthState>("idle");
   const [notice, setNotice] = useState<Notice>({
     tone: "info",
     title: "Workspace ready",
@@ -98,8 +90,8 @@ function App() {
   const [isRefreshingChats, setIsRefreshingChats] = useState(false);
   const [isCreatingChat, setIsCreatingChat] = useState(false);
   const [isContinuingChat, setIsContinuingChat] = useState(false);
-  const [isDeletingChat, setIsDeletingChat] = useState(false);
   const messageViewportRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
 
   const selectedChat = chats.find((chat) => chat.id === selectedChatId) ?? null;
   const filteredChats = (() => {
@@ -133,8 +125,6 @@ function App() {
     if (session?.jwt) {
       setAuthToken(session.jwt);
     }
-
-    void refreshHealth();
   }, []);
 
   useEffect(() => {
@@ -158,16 +148,25 @@ function App() {
     viewport.scrollTop = viewport.scrollHeight;
   }, [selectedChat?.id, selectedChat?.messages.length]);
 
-  async function refreshHealth() {
-    setHealth("checking");
+  useEffect(() => {
+    const textarea = composerRef.current;
 
-    try {
-      await checkHealth();
-      setHealth("online");
-    } catch {
-      setHealth("offline");
+    if (!textarea) {
+      return;
     }
-  }
+
+    const computedStyle = window.getComputedStyle(textarea);
+    const lineHeight = Number.parseFloat(computedStyle.lineHeight);
+    const paddingTop = Number.parseFloat(computedStyle.paddingTop);
+    const paddingBottom = Number.parseFloat(computedStyle.paddingBottom);
+    const maxHeight = Number.isFinite(lineHeight)
+      ? lineHeight * 10 + paddingTop + paddingBottom
+      : 280;
+
+    textarea.style.height = "0px";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+  }, [composerText]);
 
   async function refreshChats() {
     if (!session) {
@@ -240,11 +239,6 @@ function App() {
         email: loginDraft.email.trim().toLowerCase(),
         jwt: response.jwt,
       });
-      setNotice({
-        tone: "success",
-        title: "Signed in",
-        detail: "Your chat workspace is connected and ready.",
-      });
     } catch (error) {
       showError("Login failed", error);
     } finally {
@@ -278,11 +272,6 @@ function App() {
         setChats((current) => sortChats([chat, ...current.filter((item) => item.id !== chat.id)]));
         setSelectedChatId(chat.id);
         setComposerText("");
-        setNotice({
-          tone: "success",
-          title: "Conversation started",
-          detail: "The assistant replied in a fresh chat.",
-        });
       } catch (error) {
         if (isUnauthorized(error)) {
           handleExpiredSession();
@@ -320,35 +309,6 @@ function App() {
     }
   }
 
-  async function handleDeleteSelectedChat() {
-    if (!selectedChat) {
-      return;
-    }
-
-    setIsDeletingChat(true);
-
-    try {
-      await deleteChat(selectedChat.id);
-      const nextChats = chats.filter((chat) => chat.id !== selectedChat.id);
-      setChats(nextChats);
-      setSelectedChatId(nextChats[0]?.id ?? "");
-      setNotice({
-        tone: "success",
-        title: "Conversation deleted",
-        detail: "The selected chat was removed from the workspace.",
-      });
-    } catch (error) {
-      if (isUnauthorized(error)) {
-        handleExpiredSession();
-        return;
-      }
-
-      showError("Delete failed", error);
-    } finally {
-      setIsDeletingChat(false);
-    }
-  }
-
   function handleLogout() {
     setSession(null);
     setChats([]);
@@ -383,11 +343,6 @@ function App() {
     });
   }
 
-  function applyStarterPrompt(value: string) {
-    setSelectedChatId("");
-    setComposerText(value);
-  }
-
   function showError(title: string, error: unknown) {
     if (error instanceof ApiClientError) {
       setNotice({
@@ -416,70 +371,33 @@ function App() {
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(248,226,192,0.9),_transparent_28%),radial-gradient(circle_at_top_right,_rgba(214,228,255,0.9),_transparent_26%),linear-gradient(180deg,_#f7f3ec_0%,_#f3efe8_42%,_#ece8df_100%)] text-slate-900">
-      <div className="mx-auto flex min-h-screen max-w-[1680px] flex-col lg:grid lg:grid-cols-[320px_minmax(0,1fr)]">
-        <aside className="border-b border-slate-900/8 bg-white/65 backdrop-blur-xl lg:border-r lg:border-b-0">
-          <div className="flex h-full flex-col gap-6 p-4 sm:p-6">
-            <section className="rounded-[2rem] border border-slate-900/8 bg-slate-950 px-5 py-5 text-white shadow-[0_24px_60px_rgba(15,23,42,0.22)]">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <div className="inline-flex items-center gap-2 rounded-full border border-white/12 bg-white/8 px-3 py-1 text-[11px] font-semibold tracking-[0.24em] uppercase text-white/80">
-                    <ShieldCheck className="h-3.5 w-3.5" />
-                    GTU AI Assistant
-                  </div>
-                  <h1 className="mt-4 font-['Sora'] text-[1.7rem] leading-tight">
-                    Chat workspace instead of a test dashboard.
-                  </h1>
-                  <p className="mt-3 text-sm leading-6 text-white/68">
-                    One sidebar, one conversation view, one composer. The API stays the same, the
-                    product surface becomes familiar.
-                  </p>
+      <div
+        className={`mx-auto flex min-h-screen max-w-[1680px] flex-col ${
+          session ? "lg:grid lg:grid-cols-[320px_minmax(0,1fr)]" : ""
+        }`}
+      >
+        {session ? (
+          <aside className="border-b border-slate-900/8 bg-white/65 backdrop-blur-xl lg:border-r lg:border-b-0">
+            <div className="flex h-full flex-col gap-6 p-4 sm:p-6">
+              <button
+                type="button"
+                onClick={handleStartNewChat}
+                className="inline-flex items-center justify-center gap-2 rounded-[1.35rem] bg-slate-950 px-4 py-3 text-sm font-semibold text-white shadow-[0_16px_34px_rgba(15,23,42,0.15)] transition hover:-translate-y-0.5"
+              >
+                <Sparkles className="h-4 w-4" />
+                New chat
+              </button>
+
+              <section className="rounded-[1.75rem] border border-slate-900/8 bg-white/85 p-4 shadow-[0_16px_32px_rgba(148,163,184,0.12)]">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    value={chatSearch}
+                    onChange={(event) => setChatSearch(event.target.value)}
+                    placeholder="Search chats"
+                    className="w-full rounded-[1.1rem] border border-slate-200 bg-slate-50 py-2.5 pr-3 pl-9 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
+                  />
                 </div>
-
-                <button
-                  type="button"
-                  onClick={() => void refreshHealth()}
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/12 bg-white/8 text-white transition hover:bg-white/14"
-                  aria-label="Refresh backend health"
-                >
-                  <RefreshCw className={`h-4 w-4 ${health === "checking" ? "animate-spin" : ""}`} />
-                </button>
-              </div>
-
-              <div className="mt-6 grid grid-cols-2 gap-3">
-                <MiniStat
-                  label="Backend"
-                  value={formatHealthLabel(health)}
-                  accent={health === "online" ? "emerald" : health === "offline" ? "rose" : "amber"}
-                />
-                <MiniStat
-                  label="Chats"
-                  value={String(chats.length)}
-                  accent="slate"
-                />
-              </div>
-            </section>
-
-            {session ? (
-              <>
-                <button
-                  type="button"
-                  onClick={handleStartNewChat}
-                  className="inline-flex items-center justify-center gap-2 rounded-[1.35rem] bg-slate-950 px-4 py-3 text-sm font-semibold text-white shadow-[0_16px_34px_rgba(15,23,42,0.15)] transition hover:-translate-y-0.5"
-                >
-                  <Sparkles className="h-4 w-4" />
-                  New chat
-                </button>
-
-                <section className="rounded-[1.75rem] border border-slate-900/8 bg-white/85 p-4 shadow-[0_16px_32px_rgba(148,163,184,0.12)]">
-                  <div className="relative">
-                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                    <input
-                      value={chatSearch}
-                      onChange={(event) => setChatSearch(event.target.value)}
-                      placeholder="Search chats"
-                      className="w-full rounded-[1.1rem] border border-slate-200 bg-slate-50 py-2.5 pr-3 pl-9 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
-                    />
-                  </div>
 
                   <div className="mt-4 flex items-center justify-between text-xs font-medium text-slate-500">
                     <span>Recent conversations</span>
@@ -533,80 +451,40 @@ function App() {
                       })
                     )}
                   </div>
-                </section>
-
-                <section className="mt-auto rounded-[1.75rem] border border-slate-900/8 bg-white/85 p-4 shadow-[0_16px_32px_rgba(148,163,184,0.12)]">
-                  <div className="flex items-start gap-3">
-                    <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-950 text-sm font-semibold text-white">
-                      {session.email.slice(0, 2).toUpperCase()}
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs font-semibold tracking-[0.18em] text-slate-500 uppercase">
-                        Active session
-                      </p>
-                      <p className="truncate pt-1 text-sm font-semibold text-slate-900">
-                        {session.email}
-                      </p>
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={handleLogout}
-                    className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-[1.1rem] border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-                  >
-                    <LogOut className="h-4 w-4" />
-                    Log out
-                  </button>
-                </section>
-              </>
-            ) : (
-              <section className="rounded-[1.75rem] border border-slate-900/8 bg-white/85 p-5 text-sm text-slate-600 shadow-[0_16px_32px_rgba(148,163,184,0.12)]">
-                <p className="text-xs font-semibold tracking-[0.18em] text-slate-500 uppercase">
-                  Session
-                </p>
-                <p className="mt-2 leading-6">
-                  Sign in to unlock the conversation list, message stream, and protected API routes.
-                </p>
               </section>
-            )}
-          </div>
-        </aside>
 
-        <main className="flex min-h-[calc(100vh-120px)] flex-col lg:min-h-screen lg:overflow-hidden">
+              <section className="mt-auto rounded-[1.75rem] border border-slate-900/8 bg-white/85 p-4 shadow-[0_16px_32px_rgba(148,163,184,0.12)]">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-950 text-sm font-semibold text-white">
+                    {session.email.slice(0, 2).toUpperCase()}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold tracking-[0.18em] text-slate-500 uppercase">
+                      Active session
+                    </p>
+                    <p className="truncate pt-1 text-sm font-semibold text-slate-900">
+                      {session.email}
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-[1.1rem] border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+                >
+                  <LogOut className="h-4 w-4" />
+                  Log out
+                </button>
+              </section>
+            </div>
+          </aside>
+        ) : null}
+
+        <main className="flex min-h-0 flex-1 flex-col lg:overflow-hidden">
           {!session ? (
             <div className="flex flex-1 items-center px-4 py-8 sm:px-6 lg:px-10">
-              <div className="grid w-full gap-6 xl:grid-cols-[minmax(0,1.1fr)_460px]">
-                <section className="rounded-[2.25rem] border border-white/65 bg-white/70 p-6 shadow-[0_24px_70px_rgba(148,163,184,0.14)] backdrop-blur-xl sm:p-8 lg:p-10">
-                  <div className="inline-flex items-center gap-2 rounded-full bg-amber-100 px-3 py-1 text-[11px] font-semibold tracking-[0.24em] text-amber-900 uppercase">
-                    <Bot className="h-3.5 w-3.5" />
-                    Chat-first frontend
-                  </div>
-                  <h2 className="mt-5 max-w-3xl font-['Sora'] text-4xl leading-tight text-slate-950 sm:text-5xl">
-                    The product should feel like a real assistant, not a backend control panel.
-                  </h2>
-                  <p className="mt-5 max-w-2xl text-base leading-8 text-slate-600">
-                    This layout mirrors the structure users expect from ChatGPT, Claude, and Gemini:
-                    persistent conversations on the left, focused reading in the center, and one
-                    clear place to type.
-                  </p>
-
-                  <div className="mt-8 grid gap-4 md:grid-cols-3">
-                    <FeatureCard
-                      title="Single composer"
-                      detail="One input handles both new conversations and replies."
-                    />
-                    <FeatureCard
-                      title="Conversation memory"
-                      detail="Recent chats stay in a dedicated sidebar instead of being buried in forms."
-                    />
-                    <FeatureCard
-                      title="Clean auth gate"
-                      detail="Users sign in once, then stay inside the workspace."
-                    />
-                  </div>
-                </section>
-
+              <div className="mx-auto w-full max-w-[460px]">
                 <section className="rounded-[2.25rem] border border-white/65 bg-white/82 p-6 shadow-[0_24px_70px_rgba(148,163,184,0.14)] backdrop-blur-xl sm:p-8">
                   <div className="inline-flex rounded-full border border-slate-200 bg-slate-100 p-1">
                     <button
@@ -633,17 +511,16 @@ function App() {
                     </button>
                   </div>
 
-                  <div className="mt-6">
+                  {notice.tone !== "info" ? (
+                    <div className="mt-6">
                     <NoticeBanner notice={notice} />
-                  </div>
+                    </div>
+                  ) : null}
 
                   {authMode === "login" ? (
                     <form className="mt-6 space-y-4" onSubmit={(event) => void handleLogin(event)}>
                       <div>
                         <p className="font-['Sora'] text-2xl text-slate-950">Welcome back</p>
-                        <p className="mt-2 text-sm leading-6 text-slate-500">
-                          Sign in to continue with your existing JWT-backed session.
-                        </p>
                       </div>
 
                       <Field
@@ -730,57 +607,13 @@ function App() {
               </div>
             </div>
           ) : (
-            <>
-              <header className="border-b border-slate-900/8 bg-white/55 px-4 py-4 backdrop-blur-xl sm:px-6 lg:px-10">
-                <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-                  <div>
-                    <p className="text-xs font-semibold tracking-[0.24em] text-slate-500 uppercase">
-                      {selectedChat ? "Current conversation" : "Draft conversation"}
-                    </p>
-                    <h2 className="mt-2 font-['Sora'] text-2xl text-slate-950 sm:text-3xl">
-                      {selectedChat ? getChatTitle(selectedChat) : "Start a new conversation"}
-                    </h2>
-                    <p className="mt-2 text-sm text-slate-500">
-                      {selectedChat
-                        ? `${selectedChat.messages.length} messages • updated ${formatFullDateTime(selectedChat.updatedAt)}`
-                        : "Type the first prompt below and the backend will create the chat automatically."}
-                    </p>
-                  </div>
+            <div className="flex min-h-0 flex-1 flex-col gap-5 px-4 py-5 sm:px-6 lg:px-10 lg:py-6">
+                {notice.tone !== "info" ? <NoticeBanner notice={notice} /> : null}
 
-                  <div className="flex flex-wrap items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => void refreshChats()}
-                      className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
-                    >
-                      <RefreshCw
-                        className={`h-4 w-4 ${isRefreshingChats ? "animate-spin" : ""}`}
-                      />
-                      Refresh
-                    </button>
-
-                    {selectedChat ? (
-                      <button
-                        type="button"
-                        onClick={() => void handleDeleteSelectedChat()}
-                        disabled={isDeletingChat}
-                        className="inline-flex items-center gap-2 rounded-full border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-medium text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                        {isDeletingChat ? "Deleting..." : "Delete chat"}
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-              </header>
-
-              <div className="flex flex-1 flex-col gap-5 px-4 py-5 sm:px-6 lg:min-h-0 lg:px-10 lg:py-6">
-                <NoticeBanner notice={notice} />
-
-                <section className="flex flex-1 flex-col overflow-hidden rounded-[2rem] border border-white/60 bg-white/70 shadow-[0_24px_70px_rgba(148,163,184,0.12)] backdrop-blur-xl">
+                <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[2rem] border border-white/60 bg-white/70 shadow-[0_24px_70px_rgba(148,163,184,0.12)] backdrop-blur-xl">
                   <div
                     ref={messageViewportRef}
-                    className="flex-1 space-y-4 overflow-y-auto px-4 py-5 sm:px-6 lg:px-8 lg:py-7"
+                    className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-5 sm:px-6 lg:px-8 lg:py-7"
                   >
                     {selectedChat ? (
                       selectedChat.messages.map((message) => {
@@ -831,32 +664,7 @@ function App() {
                           </article>
                         );
                       })
-                    ) : (
-                      <div className="flex h-full min-h-[360px] flex-col items-center justify-center text-center">
-                        <div className="flex h-16 w-16 items-center justify-center rounded-[1.5rem] bg-slate-950 text-white">
-                          <MessageSquareText className="h-7 w-7" />
-                        </div>
-                        <h3 className="mt-6 font-['Sora'] text-3xl text-slate-950">
-                          Start a chat like a real assistant app
-                        </h3>
-                        <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-500 sm:text-base">
-                          Pick a conversation on the left or use one of these starters. Sending the
-                          first message creates the chat automatically.
-                        </p>
-                        <div className="mt-8 grid w-full max-w-3xl gap-3 md:grid-cols-3">
-                          {STARTER_PROMPTS.map((prompt) => (
-                            <button
-                              key={prompt}
-                              type="button"
-                              onClick={() => applyStarterPrompt(prompt)}
-                              className="rounded-[1.5rem] border border-slate-200 bg-white px-4 py-4 text-left text-sm leading-6 text-slate-700 transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-[0_16px_28px_rgba(148,163,184,0.14)]"
-                            >
-                              {prompt}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+                    ) : null}
                   </div>
 
                   <form
@@ -865,15 +673,16 @@ function App() {
                   >
                     <div className="rounded-[1.75rem] border border-slate-200 bg-white p-3 shadow-[0_18px_42px_rgba(148,163,184,0.14)]">
                       <textarea
+                        ref={composerRef}
                         value={composerText}
                         onChange={(event) => setComposerText(event.target.value)}
-                        rows={3}
+                        rows={1}
                         placeholder={
                           selectedChat
                             ? "Reply to the assistant..."
                             : "Message the assistant to begin a new conversation..."
                         }
-                        className="min-h-24 w-full resize-none border-0 bg-transparent px-2 py-2 text-sm leading-7 text-slate-900 outline-none placeholder:text-slate-400 sm:text-[15px]"
+                        className="max-h-[280px] w-full resize-none overflow-hidden border-0 bg-transparent px-2 py-2 text-sm leading-7 text-slate-900 outline-none placeholder:text-slate-400 sm:text-[15px]"
                       />
 
                       <div className="mt-3 flex flex-col gap-3 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
@@ -883,9 +692,6 @@ function App() {
                               isSending || isRefreshingChats ? "animate-pulse" : ""
                             }`}
                           />
-                          {selectedChat
-                            ? "Messages are appended to the current conversation."
-                            : "The first message will create a new chat."}
                         </div>
 
                         <button
@@ -904,8 +710,7 @@ function App() {
                     </div>
                   </form>
                 </section>
-              </div>
-            </>
+            </div>
           )}
         </main>
       </div>
@@ -957,20 +762,6 @@ function PrimaryButton({ type, busy, icon, children }: PrimaryButtonProps) {
   );
 }
 
-type FeatureCardProps = {
-  title: string;
-  detail: string;
-};
-
-function FeatureCard({ title, detail }: FeatureCardProps) {
-  return (
-    <div className="rounded-[1.6rem] border border-slate-200 bg-white/75 p-4">
-      <p className="font-['Sora'] text-lg text-slate-950">{title}</p>
-      <p className="mt-2 text-sm leading-6 text-slate-500">{detail}</p>
-    </div>
-  );
-}
-
 type NoticeBannerProps = {
   notice: Notice;
 };
@@ -987,30 +778,6 @@ function NoticeBanner({ notice }: NoticeBannerProps) {
     <div className={`rounded-[1.4rem] border px-4 py-3 ${toneClasses}`}>
       <p className="font-semibold">{notice.title}</p>
       <p className="mt-1 text-sm leading-6">{notice.detail}</p>
-    </div>
-  );
-}
-
-type MiniStatProps = {
-  label: string;
-  value: string;
-  accent: "emerald" | "rose" | "amber" | "slate";
-};
-
-function MiniStat({ label, value, accent }: MiniStatProps) {
-  const accentClasses =
-    accent === "emerald"
-      ? "bg-emerald-400/14 text-emerald-100"
-      : accent === "rose"
-        ? "bg-rose-400/14 text-rose-100"
-        : accent === "amber"
-          ? "bg-amber-300/14 text-amber-100"
-          : "bg-white/8 text-white";
-
-  return (
-    <div className={`rounded-[1.3rem] px-3 py-3 ${accentClasses}`}>
-      <p className="text-[11px] font-semibold tracking-[0.18em] uppercase text-white/64">{label}</p>
-      <p className="mt-2 font-['Sora'] text-xl">{value}</p>
     </div>
   );
 }
@@ -1061,22 +828,6 @@ function truncate(value: string, length: number) {
   return `${value.slice(0, length - 1)}...`;
 }
 
-function formatHealthLabel(health: HealthState) {
-  if (health === "online") {
-    return "Online";
-  }
-
-  if (health === "offline") {
-    return "Offline";
-  }
-
-  if (health === "checking") {
-    return "Checking";
-  }
-
-  return "Idle";
-}
-
 function formatSidebarDate(value: string) {
   return new Intl.DateTimeFormat(undefined, {
     month: "short",
@@ -1091,21 +842,8 @@ function formatMessageTime(value: string) {
   }).format(new Date(value));
 }
 
-function formatFullDateTime(value: string) {
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(value));
-}
-
 function isUnauthorized(error: unknown) {
   return error instanceof ApiClientError && error.status === 401;
 }
-
-const STARTER_PROMPTS = [
-  "Help me summarize the current project structure before we change anything.",
-  "Draft a clean frontend architecture for this assistant app.",
-  "List the next product-quality improvements for this chat experience.",
-];
 
 export default App;
