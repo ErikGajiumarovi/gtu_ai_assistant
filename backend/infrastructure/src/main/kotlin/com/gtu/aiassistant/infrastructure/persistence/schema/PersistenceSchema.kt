@@ -7,7 +7,18 @@ import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 object PersistenceSchema {
     fun create(database: Database) {
         transaction(database) {
-            SchemaUtils.create(UsersTable, ChatsTable, ChatMessagesTable)
+            exec("CREATE EXTENSION IF NOT EXISTS vector")
+
+            SchemaUtils.create(
+                UsersTable,
+                ChatsTable,
+                ChatMessagesTable,
+                ChatMessageCitationsTable,
+                KnowledgeSourcesTable,
+                KnowledgeDocumentsTable,
+                KnowledgeChunksTable,
+                IngestionRunsTable
+            )
         }
     }
 }

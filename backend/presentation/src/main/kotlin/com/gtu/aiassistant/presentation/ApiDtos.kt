@@ -46,7 +46,16 @@ data class MessageResponse(
     val id: String,
     val originalText: String,
     val senderType: String,
-    val createdAt: String
+    val createdAt: String,
+    val citations: List<CitationResponse> = emptyList()
+)
+
+@Serializable
+data class CitationResponse(
+    val title: String,
+    val url: String,
+    val snippet: String,
+    val sourceType: String
 )
 
 @Serializable

@@ -7,5 +7,6 @@ data class Message(
     val id: UUID,
     val originalText: String,
     val senderType: MessageSenderType,
-    val createdAt: Instant
+    val createdAt: Instant,
+    val citations: List<MessageCitation> = emptyList()
 )

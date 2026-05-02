@@ -261,7 +261,15 @@ private fun com.gtu.aiassistant.domain.chat.model.Chat.toResponse(): ChatRespons
                 id = message.id.toString(),
                 originalText = message.originalText,
                 senderType = message.senderType.name,
-                createdAt = message.createdAt.toString()
+                createdAt = message.createdAt.toString(),
+                citations = message.citations.map { citation ->
+                    CitationResponse(
+                        title = citation.title,
+                        url = citation.url,
+                        snippet = citation.snippet,
+                        sourceType = citation.sourceType.name
+                    )
+                }
             )
         }
     )

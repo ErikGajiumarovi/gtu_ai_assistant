@@ -39,11 +39,19 @@ export type ContinueChatWithAgentRequest = {
   originalText: string;
 };
 
+export type CitationResponse = {
+  title: string;
+  url: string;
+  snippet: string;
+  sourceType: "RAG" | "WEB";
+};
+
 export type MessageResponse = {
   id: string;
   originalText: string;
   senderType: "USER" | "AI";
   createdAt: string;
+  citations: CitationResponse[];
 };
 
 export type ChatResponse = {

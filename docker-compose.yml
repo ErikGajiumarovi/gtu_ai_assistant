@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     container_name: gtu-ai-assistant-postgres
     environment:
       POSTGRES_DB: gtu_ai_assistant
@@ -30,6 +30,12 @@ services:
       APP_PORT: 8080
       APP_AI_MODE: openai
       APP_AI_MODEL: gpt-oss:20b
+      APP_RAG_ENABLED: "true"
+      APP_CRAWLER_ENABLED: "true"
+      APP_RAG_INGEST_ON_STARTUP: "true"
+      APP_RAG_MAX_PAGES_PER_RUN: "250"
+      APP_EMBEDDING_MODE: hash
+      APP_WEB_SEARCH_MODE: direct
       APP_PERSISTENCE_MODE: postgres
       APP_DB_JDBC_URL: jdbc:postgresql://postgres:5432/gtu_ai_assistant
       APP_DB_USERNAME: postgres

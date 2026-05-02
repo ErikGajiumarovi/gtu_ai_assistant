@@ -809,6 +809,23 @@ function App() {
                               <p className="text-sm leading-7 whitespace-pre-wrap sm:text-[15px]">
                                 {message.originalText}
                               </p>
+                              {!isUser && message.citations.length > 0 ? (
+                                <div className="mt-4 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+                                  {message.citations.map((citation) => (
+                                    <a
+                                      key={`${message.id}-${citation.url}`}
+                                      href={citation.url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      title={citation.snippet || citation.title}
+                                      className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 transition hover:border-slate-300 hover:bg-white hover:text-slate-700"
+                                    >
+                                      {citation.sourceType === "WEB" ? "Web" : "GTU"} ·{" "}
+                                      {citation.title || new URL(citation.url).hostname}
+                                    </a>
+                                  ))}
+                                </div>
+                              ) : null}
                             </div>
                           </article>
                         );

@@ -60,6 +60,37 @@ class SaveChatPortImpl(
                 this[ChatMessageRecords.createdAt] = message.createdAt
             }
 
+            val citations = chat.messages.flatMap { message ->
+                message.citations.withIndex().map { (index, citation) ->
+                    PersistableCitation(
+                        messageId = message.id.toString(),
+                        orderIndex = index,
+                        title = citation.title,
+                        url = citation.url,
+                        snippet = citation.snippet,
+                        sourceType = citation.sourceType.name
+                    )
+                }
+            }
+
+            ChatMessageCitationRecords.table.batchInsert(citations) { citation ->
+                this[ChatMessageCitationRecords.messageId] = citation.messageId
+                this[ChatMessageCitationRecords.orderIndex] = citation.orderIndex
+                this[ChatMessageCitationRecords.title] = citation.title
+                this[ChatMessageCitationRecords.url] = citation.url
+                this[ChatMessageCitationRecords.snippet] = citation.snippet
+                this[ChatMessageCitationRecords.sourceType] = citation.sourceType
+            }
+
             chat
         }
 }
+
+private data class PersistableCitation(
+    val messageId: String,
+    val orderIndex: Int,
+    val title: String,
+    val url: String,
+    val snippet: String,
+    val sourceType: String
+)

@@ -35,7 +35,9 @@ class FindChatPortImpl(
             .selectAll()
             .where { ChatMessageRecords.chatId eq chatId.toString() }
             .orderBy(ChatMessageRecords.orderIndex to SortOrder.ASC)
-            .map { it.toDomainMessage() }
+            .map { messageRow ->
+                messageRow.toDomainMessage(findCitationsForMessage(messageRow[ChatMessageRecords.id]))
+            }
 
         return chatRow.toChatSnapshot(messages)
     }
@@ -50,8 +52,17 @@ class FindChatPortImpl(
                     .selectAll()
                     .where { ChatMessageRecords.chatId eq chatId.toString() }
                     .orderBy(ChatMessageRecords.orderIndex to SortOrder.ASC)
-                    .map { it.toDomainMessage() }
+                    .map { messageRow ->
+                        messageRow.toDomainMessage(findCitationsForMessage(messageRow[ChatMessageRecords.id]))
+                    }
 
                 chatRow.toChatSnapshot(messages)
             }
+
+    private fun findCitationsForMessage(messageId: String) =
+        ChatMessageCitationRecords.table
+            .selectAll()
+            .where { ChatMessageCitationRecords.messageId eq messageId }
+            .orderBy(ChatMessageCitationRecords.orderIndex to SortOrder.ASC)
+            .map { it.toDomainMessageCitation() }
 }
