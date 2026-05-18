@@ -33,8 +33,10 @@ import com.gtu.aiassistant.domain.chat.port.output.DeleteChatPort
 import com.gtu.aiassistant.domain.chat.port.output.FindChatPort
 import com.gtu.aiassistant.domain.chat.port.output.GenerateMessagePort
 import com.gtu.aiassistant.domain.chat.port.output.SaveChatPort
+import com.gtu.aiassistant.domain.knowledge.port.output.SaveKnowledgeIngestionRunPort
 import com.gtu.aiassistant.domain.knowledge.port.output.SearchKnowledgePort
 import com.gtu.aiassistant.domain.knowledge.port.output.UpsertKnowledgeDocumentPort
+import com.gtu.aiassistant.domain.knowledge.port.output.UpsertKnowledgeSourcesPort
 import com.gtu.aiassistant.domain.user.port.input.LoginInUseCase
 import com.gtu.aiassistant.domain.user.port.input.RegisterUserUseCase
 import com.gtu.aiassistant.domain.user.port.output.ExistsUserPort
@@ -49,8 +51,10 @@ import com.gtu.aiassistant.infrastructure.persistence.chat.FindChatPortImpl
 import com.gtu.aiassistant.infrastructure.persistence.chat.SaveChatPortImpl
 import com.gtu.aiassistant.infrastructure.persistence.config.DatabaseFactory
 import com.gtu.aiassistant.infrastructure.persistence.config.PersistenceConfig
+import com.gtu.aiassistant.infrastructure.persistence.knowledge.SaveKnowledgeIngestionRunPortImpl
 import com.gtu.aiassistant.infrastructure.persistence.knowledge.SearchKnowledgePortImpl
 import com.gtu.aiassistant.infrastructure.persistence.knowledge.UpsertKnowledgeDocumentPortImpl
+import com.gtu.aiassistant.infrastructure.persistence.knowledge.UpsertKnowledgeSourcesPortImpl
 import com.gtu.aiassistant.infrastructure.persistence.support.JdbcPersistenceExecutor
 import com.gtu.aiassistant.infrastructure.persistence.user.ExistsUserPortImpl
 import com.gtu.aiassistant.infrastructure.persistence.user.FindUserPortImpl
@@ -60,8 +64,10 @@ import com.gtu.aiassistant.infrastructure.security.Argon2HashPasswordPortImpl
 import com.gtu.aiassistant.infrastructure.security.Argon2VerifyPasswordPortImpl
 import com.gtu.aiassistant.infrastructure.security.IssueJwtPortImpl
 import com.gtu.aiassistant.infrastructure.security.JwtConfig
+import com.gtu.aiassistant.infrastructure.knowledge.DisabledSaveKnowledgeIngestionRunPort
 import com.gtu.aiassistant.infrastructure.knowledge.DisabledSearchKnowledgePort
 import com.gtu.aiassistant.infrastructure.knowledge.DisabledUpsertKnowledgeDocumentPort
+import com.gtu.aiassistant.infrastructure.knowledge.DisabledUpsertKnowledgeSourcesPort
 import com.gtu.aiassistant.infrastructure.knowledge.GtuPageFetcher
 import com.gtu.aiassistant.infrastructure.knowledge.GtuUrlPolicy
 import com.gtu.aiassistant.infrastructure.knowledge.KnowledgeDocumentBuilder
@@ -137,7 +143,7 @@ private fun appModule(
     single { GtuUrlPolicy(get<KnowledgeIngestionConfig>().allowedDomains) }
     single { GtuPageFetcher(get(), get()) }
     single { KnowledgeDocumentBuilder(get()) }
-    single { KnowledgeIngestionService(get(), get(), get(), get(), get()) }
+    single { KnowledgeIngestionService(get(), get(), get(), get(), get(), get(), get()) }
     single { KnowledgeIngestionScheduler(get(), get()) }
     single {
         WebSearchConfig(
@@ -192,6 +198,8 @@ private fun appModule(
             single<DeleteChatPort> { InMemoryDeleteChatPort(get()) }
             single<SearchKnowledgePort> { DisabledSearchKnowledgePort() }
             single<UpsertKnowledgeDocumentPort> { DisabledUpsertKnowledgeDocumentPort() }
+            single<UpsertKnowledgeSourcesPort> { DisabledUpsertKnowledgeSourcesPort() }
+            single<SaveKnowledgeIngestionRunPort> { DisabledSaveKnowledgeIngestionRunPort() }
         }
 
         PersistenceMode.POSTGRES -> {
@@ -224,6 +232,20 @@ private fun appModule(
                     UpsertKnowledgeDocumentPortImpl(get())
                 } else {
                     DisabledUpsertKnowledgeDocumentPort()
+                }
+            }
+            single<UpsertKnowledgeSourcesPort> {
+                if (runtimeConfig.ragEnabled) {
+                    UpsertKnowledgeSourcesPortImpl(get())
+                } else {
+                    DisabledUpsertKnowledgeSourcesPort()
+                }
+            }
+            single<SaveKnowledgeIngestionRunPort> {
+                if (runtimeConfig.ragEnabled) {
+                    SaveKnowledgeIngestionRunPortImpl(get())
+                } else {
+                    DisabledSaveKnowledgeIngestionRunPort()
                 }
             }
         }

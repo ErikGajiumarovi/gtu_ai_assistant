@@ -8,7 +8,6 @@ import com.gtu.aiassistant.domain.knowledge.port.output.SearchKnowledgePort
 import com.gtu.aiassistant.infrastructure.ai.embedding.EmbeddingPort
 import com.gtu.aiassistant.infrastructure.persistence.support.JdbcPersistenceExecutor
 import org.jetbrains.exposed.v1.jdbc.selectAll
-import kotlin.math.sqrt
 
 class SearchKnowledgePortImpl(
     private val executor: JdbcPersistenceExecutor,
@@ -17,24 +16,44 @@ class SearchKnowledgePortImpl(
     override suspend fun invoke(query: KnowledgeSearchQuery) =
         either {
             val queryEmbedding = embeddingPort(query.text).bind()
+            val querySignals = buildKnowledgeQuerySignals(query.text)
 
             executor.execute {
                 KnowledgeChunkRecords.table
                     .selectAll()
                     .map { row ->
                         val text = row[KnowledgeChunkRecords.text]
-                        KnowledgeSearchHit(
+                        val score = scoreKnowledgeCandidate(
+                            signals = querySignals,
+                            queryEmbedding = queryEmbedding,
+                            title = row[KnowledgeChunkRecords.title],
+                            url = row[KnowledgeChunkRecords.url],
+                            text = text,
+                            candidateEmbedding = row[KnowledgeChunkRecords.embedding]
+                        )
+
+                        score to KnowledgeSearchHit(
                             chunkId = java.util.UUID.fromString(row[KnowledgeChunkRecords.id]),
                             documentId = java.util.UUID.fromString(row[KnowledgeChunkRecords.documentId]),
                             title = row[KnowledgeChunkRecords.title],
                             url = row[KnowledgeChunkRecords.url],
                             snippet = text.toSnippet(),
-                            score = cosineSimilarity(queryEmbedding, row[KnowledgeChunkRecords.embedding])
+                            score = score.finalScore
                         )
                     }
                     .asSequence()
-                    .filter { it.score >= query.minScore }
+                    .filter { (score, _) ->
+                        shouldKeepKnowledgeCandidate(
+                            signals = querySignals,
+                            score = score,
+                            minScore = query.minScore
+                        )
+                    }
+                    .map { (_, hit) -> hit }
                     .sortedByDescending { it.score }
+                    .toList()
+                    .filterByTopScore(query.minScore)
+                    .asSequence()
                     .distinctBy { it.url to it.snippet }
                     .take(query.maxResults)
                     .toList()
@@ -42,24 +61,10 @@ class SearchKnowledgePortImpl(
         }
 }
 
-private fun cosineSimilarity(left: List<Float>, right: List<Float>): Double {
-    val size = minOf(left.size, right.size)
-    if (size == 0) return 0.0
-
-    var dot = 0.0
-    var leftNorm = 0.0
-    var rightNorm = 0.0
-
-    for (index in 0 until size) {
-        val leftValue = left[index].toDouble()
-        val rightValue = right[index].toDouble()
-        dot += leftValue * rightValue
-        leftNorm += leftValue * leftValue
-        rightNorm += rightValue * rightValue
-    }
-
-    if (leftNorm == 0.0 || rightNorm == 0.0) return 0.0
-    return dot / (sqrt(leftNorm) * sqrt(rightNorm))
+private fun List<KnowledgeSearchHit>.filterByTopScore(minScore: Double): List<KnowledgeSearchHit> {
+    val topScore = firstOrNull()?.score ?: return emptyList()
+    val threshold = maxOf(minScore, topScore * 0.72, topScore - 0.18)
+    return filter { it.score >= threshold }
 }
 
 private fun String.toSnippet(): String {

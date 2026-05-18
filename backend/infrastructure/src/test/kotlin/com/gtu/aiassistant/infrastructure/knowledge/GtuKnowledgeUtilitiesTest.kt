@@ -50,4 +50,14 @@ class GtuKnowledgeUtilitiesTest {
         val norm = sqrt(first.fold(0.0) { acc, value -> acc + value * value })
         assertTrue(norm > 0.99 && norm < 1.01)
     }
+
+    @Test
+    fun `priority score favors root academic calendar over faculty pages`() {
+        val rootCalendar = "https://gtu.ge/en/students/edu/calendar.php".priorityScore()
+        val facultyCalendar = "https://gtu.ge/arch/en/students/academic-calendar.php".priorityScore()
+        val facultyGeneric = "https://gtu.ge/arch/en/students/student-achievements.php".priorityScore()
+
+        assertTrue(rootCalendar > facultyCalendar)
+        assertTrue(rootCalendar > facultyGeneric)
+    }
 }

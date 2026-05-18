@@ -35,6 +35,7 @@ class KnowledgeDocumentBuilder(
 
             val documentId = stableUuid(canonicalUrl)
             val sourceLastModifiedAt = page.sourceLastModifiedAt ?: sitemapLastModifiedAt
+            val urlKeywords = canonicalUrl.urlKeywords()
             val chunks = text.toChunks().mapIndexed { index, chunkText ->
                 KnowledgeChunk(
                     id = stableUuid("$canonicalUrl#$index"),
@@ -43,7 +44,15 @@ class KnowledgeDocumentBuilder(
                     title = title,
                     url = canonicalUrl,
                     text = chunkText,
-                    embedding = embeddingPort("$title\n$chunkText").bind()
+                    embedding = embeddingPort(
+                        buildString {
+                            appendLine(title)
+                            if (urlKeywords.isNotBlank()) {
+                                appendLine(urlKeywords)
+                            }
+                            append(chunkText)
+                        }
+                    ).bind()
                 )
             }
 
@@ -52,7 +61,7 @@ class KnowledgeDocumentBuilder(
                 sourceUrl = page.url,
                 canonicalUrl = canonicalUrl,
                 title = title,
-                contentHash = sha256(text),
+                contentHash = sha256("$title\n$canonicalUrl\n$text"),
                 fetchedAt = page.fetchedAt,
                 sourceLastModifiedAt = sourceLastModifiedAt,
                 chunks = chunks
@@ -84,6 +93,13 @@ class KnowledgeDocumentBuilder(
 
 private fun stableUuid(value: String): UUID =
     UUID.nameUUIDFromBytes(value.toByteArray())
+
+private fun String.urlKeywords(): String =
+    substringAfter("://", this)
+        .substringAfter('/', "")
+        .replace(Regex("""[^\\p{L}\\p{N}]+"""), " ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
 
 private fun sha256(value: String): String {
     val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray())

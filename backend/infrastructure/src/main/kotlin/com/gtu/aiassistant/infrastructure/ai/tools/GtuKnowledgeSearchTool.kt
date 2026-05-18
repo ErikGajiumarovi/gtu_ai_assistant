@@ -14,7 +14,7 @@ class GtuKnowledgeSearchTool(
             KnowledgeSearchQuery(
                 text = query,
                 maxResults = maxResults,
-                minScore = 0.18
+                minScore = 0.22
             )
         ).map { hits ->
             hits.map { hit ->
