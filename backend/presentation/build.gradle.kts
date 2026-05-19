@@ -10,6 +10,7 @@ kotlin {
 dependencies {
     implementation(project(":backend:domain"))
     implementation(project(":backend:application"))
+    implementation(project(":shared:api-models"))
 
     implementation(libs.arrow.core)
     implementation(libs.ktor.server.core)

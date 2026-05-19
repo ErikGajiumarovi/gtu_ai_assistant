@@ -1,98 +1,22 @@
 package com.gtu.aiassistant.presentation
 
 import com.gtu.aiassistant.domain.model.DomainError
-import kotlinx.serialization.Serializable
+import com.gtu.aiassistant.shared.ApiErrorResponse
 
-@Serializable
-data class RegisterUserRequest(
-    val name: String,
-    val lastName: String,
-    val email: String,
-    val password: String
-)
+fun fromDomainError(error: DomainError): ApiErrorResponse =
+    ApiErrorResponse(
+        code = error::class.simpleName ?: "domain_error",
+        message = error.toString()
+    )
 
-@Serializable
-data class LoginInRequest(
-    val email: String,
-    val password: String
-)
+fun fromUseCaseError(error: Any): ApiErrorResponse =
+    ApiErrorResponse(
+        code = error::class.simpleName ?: "use_case_error",
+        message = error.toString()
+    )
 
-@Serializable
-data class LoginInResponse(
-    val jwt: String
-)
-
-@Serializable
-data class CreateChatWithAgentRequest(
-    val originalText: String
-)
-
-@Serializable
-data class ContinueChatWithAgentRequest(
-    val originalText: String
-)
-
-@Serializable
-data class UserResponse(
-    val id: String,
-    val version: Long,
-    val name: String,
-    val lastName: String,
-    val email: String
-)
-
-@Serializable
-data class MessageResponse(
-    val id: String,
-    val originalText: String,
-    val senderType: String,
-    val createdAt: String,
-    val citations: List<CitationResponse> = emptyList()
-)
-
-@Serializable
-data class CitationResponse(
-    val title: String,
-    val url: String,
-    val snippet: String,
-    val sourceType: String
-)
-
-@Serializable
-data class ChatResponse(
-    val id: String,
-    val version: Long,
-    val ownedBy: String,
-    val createdAt: String,
-    val updatedAt: String,
-    val messages: List<MessageResponse>
-)
-
-@Serializable
-data class ListChatsResponse(
-    val chats: List<ChatResponse>
-)
-
-@Serializable
-data class DeleteChatResponse(
-    val deleted: Boolean
-)
-
-@Serializable
-data class HealthResponse(
-    val status: String
-)
-
-@Serializable
-data class ApiErrorResponse(
-    val code: String,
-    val message: String
-) {
-    companion object {
-        fun fromDomainError(error: DomainError): ApiErrorResponse =
-            ApiErrorResponse(
-                code = error::class.simpleName ?: "domain_error",
-                message = error.toString()
-            )
-    }
-}
+fun unauthorizedResponse(): ApiErrorResponse =
+    ApiErrorResponse(
+        code = "unauthorized",
+        message = "Missing or invalid bearer token"
+    )

@@ -45,12 +45,12 @@ internal fun Application.configureRoutes(
                         )
                     }.fold(
                         ifLeft = { domainError ->
-                            call.respond(HttpStatusCode.BadRequest, ApiErrorResponse.fromDomainError(domainError))
+                            call.respond(HttpStatusCode.BadRequest, fromDomainError(domainError))
                         },
                         ifRight = { command ->
                             dependencies.registerUserUseCase(command).fold(
                                 ifLeft = { error ->
-                                    call.respond(error.statusCode(), ApiErrorResponse.fromUseCaseError(error))
+                                    call.respond(error.statusCode(), fromUseCaseError(error))
                                 },
                                 ifRight = { result ->
                                     call.respond(HttpStatusCode.Created, result.user.toResponse())
@@ -70,12 +70,12 @@ internal fun Application.configureRoutes(
                         )
                     }.fold(
                         ifLeft = { domainError ->
-                            call.respond(HttpStatusCode.BadRequest, ApiErrorResponse.fromDomainError(domainError))
+                            call.respond(HttpStatusCode.BadRequest, fromDomainError(domainError))
                         },
                         ifRight = { command ->
                             dependencies.loginInUseCase(command).fold(
                                 ifLeft = { error ->
-                                    call.respond(error.statusCode(), ApiErrorResponse.fromUseCaseError(error))
+                                    call.respond(error.statusCode(), fromUseCaseError(error))
                                 },
                                 ifRight = { result ->
                                     call.respond(HttpStatusCode.OK, LoginInResponse(jwt = result.jwt))
@@ -103,7 +103,7 @@ internal fun Application.configureRoutes(
                         )
                     ).fold(
                         ifLeft = { error ->
-                            call.respond(error.statusCode(), ApiErrorResponse.fromUseCaseError(error))
+                            call.respond(error.statusCode(), fromUseCaseError(error))
                         },
                         ifRight = { result ->
                             call.respond(HttpStatusCode.Created, result.chat.toResponse())
@@ -140,12 +140,12 @@ internal fun Application.configureRoutes(
                         )
                     }.fold(
                         ifLeft = { domainError ->
-                            call.respond(HttpStatusCode.BadRequest, ApiErrorResponse.fromDomainError(domainError))
+                            call.respond(HttpStatusCode.BadRequest, fromDomainError(domainError))
                         },
                         ifRight = { command ->
                             dependencies.continueChatWithAgentUseCase(command).fold(
                                 ifLeft = { error ->
-                                    call.respond(error.statusCode(), ApiErrorResponse.fromUseCaseError(error))
+                                    call.respond(error.statusCode(), fromUseCaseError(error))
                                 },
                                 ifRight = { result ->
                                     call.respond(HttpStatusCode.OK, result.chat.toResponse())
@@ -167,7 +167,7 @@ internal fun Application.configureRoutes(
                         com.gtu.aiassistant.domain.chat.port.input.ListChatsQuery(userId = principal.userId)
                     ).fold(
                         ifLeft = { error ->
-                            call.respond(error.statusCode(), ApiErrorResponse.fromUseCaseError(error))
+                            call.respond(error.statusCode(), fromUseCaseError(error))
                         },
                         ifRight = { result ->
                             call.respond(
@@ -205,12 +205,12 @@ internal fun Application.configureRoutes(
                         )
                     }.fold(
                         ifLeft = { domainError ->
-                            call.respond(HttpStatusCode.BadRequest, ApiErrorResponse.fromDomainError(domainError))
+                            call.respond(HttpStatusCode.BadRequest, fromDomainError(domainError))
                         },
                         ifRight = { command ->
                             dependencies.deleteChatUseCase(command).fold(
                                 ifLeft = { error ->
-                                    call.respond(error.statusCode(), ApiErrorResponse.fromUseCaseError(error))
+                                    call.respond(error.statusCode(), fromUseCaseError(error))
                                 },
                                 ifRight = {
                                     call.respond(HttpStatusCode.OK, DeleteChatResponse(deleted = true))
@@ -320,14 +320,4 @@ private fun com.gtu.aiassistant.domain.chat.port.input.DeleteChatError.statusCod
         is com.gtu.aiassistant.domain.chat.port.input.DeleteChatError.DeleteFailed -> HttpStatusCode.InternalServerError
     }
 
-private fun ApiErrorResponse.Companion.fromUseCaseError(error: Any): ApiErrorResponse =
-    ApiErrorResponse(
-        code = error::class.simpleName ?: "use_case_error",
-        message = error.toString()
-    )
 
-private fun unauthorizedResponse(): ApiErrorResponse =
-    ApiErrorResponse(
-        code = "unauthorized",
-        message = "Missing or invalid bearer token"
-    )

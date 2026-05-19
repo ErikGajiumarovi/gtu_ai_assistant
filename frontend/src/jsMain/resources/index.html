@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="GTU AI Assistant dashboard for creating users, opening chats, continuing conversations, listing chat history, and deleting chats." />
+    <title>GTU AI Assistant</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Sora:wght@500;600;700&display=swap" rel="stylesheet" />
+    <style>
+        :root {
+            color-scheme: light;
+            font-family: "Manrope", sans-serif;
+            background: #f7f3ec;
+            color: #0f172a;
+        }
+        *, *::before, *::after { box-sizing: border-box; }
+        html { scroll-behavior: smooth; background: #f7f3ec; }
+        body {
+            margin: 0; min-width: 320px; min-height: 100vh;
+            background: #f7f3ec; color: #0f172a;
+            text-rendering: optimizeLegibility;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+        button, input, textarea { font: inherit; }
+        button { cursor: pointer; padding: 0; border: none; background: none; }
+        a { color: inherit; text-decoration: none; }
+        ::selection { background: rgba(15, 23, 42, 0.14); }
+        ::-webkit-scrollbar { width: 10px; height: 10px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb {
+            border: 2px solid transparent; border-radius: 999px;
+            background: rgba(148, 163, 184, 0.6); background-clip: padding-box;
+        }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(100, 116, 139, 0.75); background-clip: padding-box; }
+        #root { min-height: 100vh; }
+        .space-y-4 > * + * { margin-top: 1rem; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+</body>
+</html>

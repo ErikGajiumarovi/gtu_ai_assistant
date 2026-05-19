@@ -19,5 +19,7 @@ include(
     ":backend:presentation",
     ":backend:domain",
     ":backend:application",
-    ":backend:infrastructure"
+    ":backend:infrastructure",
+    ":shared:api-models",
+    ":frontend"
 )
