@@ -7,13 +7,37 @@ import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
+import kotlinx.browser.window
+import kotlinx.coroutines.await
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import org.w3c.fetch.Headers
+import org.w3c.fetch.RequestInit
+import kotlin.js.Promise
 
 class ApiClientError(
     message: String,
     val code: String,
     val status: Int
 ) : Exception(message)
+
+@JsName("ReadableStream")
+private external class JsReadableStream {
+    fun getReader(): JsReadableStreamDefaultReader
+}
+
+@JsName("ReadableStreamDefaultReader")
+private external class JsReadableStreamDefaultReader {
+    fun read(): Promise<JsReadResult>
+}
+
+@JsName("ReadableStreamReadResult")
+private external class JsReadResult {
+    val done: Boolean
+    val value: dynamic
+}
 
 class ApiClient(private val baseUrl: String = "") {
     private val json = Json { ignoreUnknownKeys = true }
@@ -86,4 +110,120 @@ class ApiClient(private val baseUrl: String = "") {
 
     suspend fun deleteChat(chatId: String): DeleteChatResponse =
         request("/api/chats/$chatId", HttpMethod.Delete)
+
+    suspend fun createChatWithAgentStream(
+        payload: CreateChatWithAgentRequest,
+        onToken: (String) -> Unit,
+        onDone: (ChatResponse) -> Unit,
+        onError: (Exception) -> Unit
+    ) {
+        streamFromEndpoint(
+            path = "/api/chats/with-agent/stream",
+            body = json.encodeToString(payload),
+            onToken = onToken,
+            onDone = onDone,
+            onError = onError
+        )
+    }
+
+    suspend fun continueChatWithAgentStream(
+        chatId: String,
+        payload: ContinueChatWithAgentRequest,
+        onToken: (String) -> Unit,
+        onDone: (ChatResponse) -> Unit,
+        onError: (Exception) -> Unit
+    ) {
+        streamFromEndpoint(
+            path = "/api/chats/$chatId/continue/stream",
+            body = json.encodeToString(payload),
+            onToken = onToken,
+            onDone = onDone,
+            onError = onError
+        )
+    }
+
+    private suspend fun streamFromEndpoint(
+        path: String,
+        body: String,
+        onToken: (String) -> Unit,
+        onDone: (ChatResponse) -> Unit,
+        onError: (Exception) -> Unit
+    ) {
+        try {
+            val headers = Headers().also {
+                it.set("Content-Type", "application/json")
+                authToken?.let { token -> it.set("Authorization", "Bearer $token") }
+            }
+
+            val response = window.fetch(
+                "$baseUrl$path",
+                RequestInit(method = "POST", body = body, headers = headers)
+            ).await()
+
+            if (!response.ok) {
+                val errorText = response.text().await()
+                onError(ApiClientError(errorText, "stream_error", response.status.toInt()))
+                return
+            }
+
+            val stream: JsReadableStream = response.body.unsafeCast<JsReadableStream>()
+            val reader = stream.getReader()
+            val decoder = js("new TextDecoder()")
+            var buffer = ""
+
+            while (true) {
+                val result = reader.read().await()
+                if (result.done) break
+
+                val chunk: String = decoder.decode(result.value).unsafeCast<String>()
+                buffer += chunk
+
+                val lines = buffer.split("\n")
+                val hasTrailingNewline = buffer.endsWith("\n")
+                val completeLines = if (hasTrailingNewline) lines else lines.dropLast(1)
+                buffer = if (hasTrailingNewline) "" else lines.last()
+
+                for (line in completeLines) {
+                    val trimmed = line.trim()
+                    if (trimmed.isEmpty()) continue
+                    processLine(trimmed, onToken, onDone, onError)
+                }
+            }
+
+            if (buffer.isNotBlank()) {
+                processLine(buffer.trim(), onToken, onDone, onError)
+            }
+        } catch (e: Exception) {
+            onError(e)
+        }
+    }
+
+    private fun processLine(
+        line: String,
+        onToken: (String) -> Unit,
+        onDone: (ChatResponse) -> Unit,
+        onError: (Exception) -> Unit
+    ) {
+        try {
+            val obj = json.parseToJsonElement(line).jsonObject
+            val token = obj["t"]?.jsonPrimitive?.content
+            if (token != null) {
+                onToken(token)
+                return
+            }
+            val doneData = obj["d"]
+            if (doneData != null) {
+                val chat = json.decodeFromJsonElement(doneData)
+                onDone(chat)
+                return
+            }
+            val errorMsg = obj["e"]?.jsonPrimitive?.content
+            if (errorMsg != null) {
+                onError(ApiClientError(errorMsg, "stream_error", 500))
+                return
+            }
+        } catch (e: Exception) {
+            onError(ApiClientError("Parse error: ${e.message}", "parse_error", 500))
+        }
+    }
 }

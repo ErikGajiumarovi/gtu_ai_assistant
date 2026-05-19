@@ -31,52 +31,80 @@ class GenerateMessagePortImpl private constructor(
     override suspend fun invoke(messages: List<DomainMessage>): Either<InfrastructureError, DomainMessage> =
         withContext(Dispatchers.IO) {
             either {
-                val validMessages = messages
-                    .validateForMessageGeneration()
-                    .mapLeft { cause ->
-                        InfrastructureError(
-                            cause = IllegalArgumentException("Invalid message history for AI generation: $cause")
-                        )
-                    }
-                    .bind()
-
-                val llmPrompt = prompt("generate-chat-message") {
-                    system(SYSTEM_PROMPT)
-
-                    validMessages
-                        .takeLast(MAX_HISTORY_MESSAGES)
-                        .forEach { message ->
-                            when (message.senderType) {
-                                MessageSenderType.USER -> user(message.originalText)
-                                MessageSenderType.AI -> assistant(message.originalText)
-                            }
-                        }
-                }
-
-                val rawResponse = Either.catch {
-                    executor.execute(llmPrompt, model)
-                }.mapLeft(::InfrastructureError).bind()
-
-                val generatedText = Either.catch {
-                    rawResponse.assistantText()
-                }.mapLeft(::InfrastructureError).bind().trim()
-
-                ensure(generatedText.isNotBlank()) {
-                    InfrastructureError(
-                        cause = IllegalStateException("LLM response is blank")
-                    )
-                }
-
-                val lastMessageCreatedAt = validMessages.last().createdAt
-
-                DomainMessage(
-                    id = UUID.randomUUID(),
-                    originalText = generatedText,
-                    senderType = MessageSenderType.AI,
-                    createdAt = maxOf(Instant.now(), lastMessageCreatedAt.plusMillis(1))
-                )
+                val validMessages = commonValidate(messages).bind()
+                val generatedText = commonExecute(validMessages).bind()
+                buildMessage(validMessages, generatedText)
             }
         }
+
+    override suspend fun stream(
+        messages: List<DomainMessage>,
+        onToken: suspend (String) -> Unit
+    ): Either<InfrastructureError, DomainMessage> =
+        withContext(Dispatchers.IO) {
+            either {
+                val validMessages = commonValidate(messages).bind()
+                val generatedText = commonExecute(validMessages).bind()
+
+                val words = generatedText.split(" ")
+                for ((i, word) in words.withIndex()) {
+                    onToken(if (i == 0) word else " $word")
+                }
+
+                buildMessage(validMessages, generatedText)
+            }
+        }
+
+    private fun commonValidate(
+        messages: List<DomainMessage>
+    ): Either<InfrastructureError, List<DomainMessage>> = either {
+        messages
+            .validateForMessageGeneration()
+            .mapLeft { cause ->
+                InfrastructureError(cause = IllegalArgumentException("Invalid message history for AI generation: $cause"))
+            }
+            .bind()
+    }
+
+    private suspend fun commonExecute(
+        validMessages: List<DomainMessage>
+    ): Either<InfrastructureError, String> = either {
+        val llmPrompt = prompt("generate-chat-message") {
+            system(SYSTEM_PROMPT)
+            validMessages.takeLast(MAX_HISTORY_MESSAGES).forEach { message ->
+                when (message.senderType) {
+                    MessageSenderType.USER -> user(message.originalText)
+                    MessageSenderType.AI -> assistant(message.originalText)
+                }
+            }
+        }
+
+        val rawResponse = Either.catch {
+            executor.execute(llmPrompt, model)
+        }.mapLeft(::InfrastructureError).bind()
+
+        val generatedText = Either.catch {
+            rawResponse.assistantText()
+        }.mapLeft(::InfrastructureError).bind().trim()
+
+        ensure(generatedText.isNotBlank()) {
+            InfrastructureError(cause = IllegalStateException("LLM response is blank"))
+        }
+        generatedText
+    }
+
+    private fun buildMessage(
+        validMessages: List<DomainMessage>,
+        generatedText: String
+    ): DomainMessage {
+        val lastMessageCreatedAt = validMessages.last().createdAt
+        return DomainMessage(
+            id = UUID.randomUUID(),
+            originalText = generatedText,
+            senderType = MessageSenderType.AI,
+            createdAt = maxOf(Instant.now(), lastMessageCreatedAt.plusMillis(1))
+        )
+    }
 
     companion object {
         fun create(config: AiConfig): GenerateMessagePortImpl {

@@ -21,48 +21,71 @@ class ContinueChatWithAgentUseCaseImpl(
         command: com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentCommand
     ): Either<ContinueChatWithAgentError, ContinueChatWithAgentResult> =
         either {
-            val existingChat = findChatPort
-                .invoke(
-                    FindChatPort.Strategy.ById(
-                        chatId = command.chatId
-                    )
-                )
-                .mapLeft(ContinueChatWithAgentError::PersistenceFailed)
-                .bind()
-                .expectSingle()
-                .mapLeft(ContinueChatWithAgentError::PersistenceFailed)
-                .bind()
-
-            ensure(existingChat != null) { ContinueChatWithAgentError.ChatNotFound }
-            ensure(existingChat.ownedBy == command.userId) { ContinueChatWithAgentError.AccessDenied }
-
-            val historyForGeneration = (existingChat.messages + command.message)
-                .validateForMessageGeneration()
-                .mapLeft(ContinueChatWithAgentError::InvalidDomainState)
-                .bind()
-
+            val existingChat = resolveChat(command).bind()
+            val historyForGeneration = buildHistory(existingChat, command).bind()
             val generatedMessage = generateMessagePort
                 .invoke(historyForGeneration)
                 .mapLeft(ContinueChatWithAgentError::MessageGenerationFailed)
                 .bind()
-
-            val updatedChat = existingChat
-                .appendMessages(
-                    userMessage = command.message,
-                    aiMessage = generatedMessage
-                )
-                .mapLeft(ContinueChatWithAgentError::InvalidDomainState)
-                .bind()
-
-            val persistedChat = saveChatPort
-                .invoke(updatedChat)
-                .mapLeft(ContinueChatWithAgentError::PersistenceFailed)
-                .bind()
-
-            ContinueChatWithAgentResult(
-                chat = persistedChat
-            )
+            saveUpdatedChat(existingChat, command, generatedMessage).bind()
         }
+
+    override suspend fun stream(
+        command: com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentCommand,
+        onToken: suspend (String) -> Unit
+    ): Either<ContinueChatWithAgentError, ContinueChatWithAgentResult> =
+        either {
+            val existingChat = resolveChat(command).bind()
+            val historyForGeneration = buildHistory(existingChat, command).bind()
+            val generatedMessage = generateMessagePort
+                .stream(historyForGeneration, onToken)
+                .mapLeft(ContinueChatWithAgentError::MessageGenerationFailed)
+                .bind()
+            saveUpdatedChat(existingChat, command, generatedMessage).bind()
+        }
+
+    private suspend fun resolveChat(
+        command: com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentCommand
+    ): Either<ContinueChatWithAgentError, com.gtu.aiassistant.domain.chat.model.Chat> = either {
+        val existingChat = findChatPort
+            .invoke(FindChatPort.Strategy.ById(chatId = command.chatId))
+            .mapLeft(ContinueChatWithAgentError::PersistenceFailed)
+            .bind()
+            .expectSingle()
+            .mapLeft(ContinueChatWithAgentError::PersistenceFailed)
+            .bind()
+
+        ensure(existingChat != null) { ContinueChatWithAgentError.ChatNotFound }
+        ensure(existingChat.ownedBy == command.userId) { ContinueChatWithAgentError.AccessDenied }
+        existingChat
+    }
+
+    private fun buildHistory(
+        existingChat: com.gtu.aiassistant.domain.chat.model.Chat,
+        command: com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentCommand
+    ): Either<ContinueChatWithAgentError, List<com.gtu.aiassistant.domain.chat.model.Message>> = either {
+        (existingChat.messages + command.message)
+            .validateForMessageGeneration()
+            .mapLeft(ContinueChatWithAgentError::InvalidDomainState)
+            .bind()
+    }
+
+    private suspend fun saveUpdatedChat(
+        existingChat: com.gtu.aiassistant.domain.chat.model.Chat,
+        command: com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentCommand,
+        generatedMessage: com.gtu.aiassistant.domain.chat.model.Message
+    ): Either<ContinueChatWithAgentError, ContinueChatWithAgentResult> = either {
+        val updatedChat = existingChat.appendMessages(command.message, generatedMessage)
+            .mapLeft(ContinueChatWithAgentError::InvalidDomainState)
+            .bind()
+
+        val persistedChat = saveChatPort
+            .invoke(updatedChat)
+            .mapLeft(ContinueChatWithAgentError::PersistenceFailed)
+            .bind()
+
+        ContinueChatWithAgentResult(chat = persistedChat)
+    }
 }
 
 private fun Chat.appendMessages(

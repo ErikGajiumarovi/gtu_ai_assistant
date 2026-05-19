@@ -8,6 +8,8 @@ import com.gtu.aiassistant.domain.user.model.UserEmail
 import com.gtu.aiassistant.domain.user.model.UserLastName
 import com.gtu.aiassistant.domain.user.model.UserName
 import com.gtu.aiassistant.domain.user.model.UserPassword
+import com.gtu.aiassistant.shared.*
+import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.application.call
@@ -15,13 +17,18 @@ import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.principal
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondTextWriter
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import java.time.Instant
 import java.util.UUID
+
+private val ndjsonJson = Json { encodeDefaults = false }
 
 internal fun Application.configureRoutes(
     dependencies: ApiDependencies
@@ -111,6 +118,41 @@ internal fun Application.configureRoutes(
                     )
                 }
 
+                post("/chats/with-agent/stream") {
+                    val request = call.receive<CreateChatWithAgentRequest>()
+                    val principal = call.principal<AuthenticatedUserPrincipal>()
+
+                    if (principal == null) {
+                        call.respond(HttpStatusCode.Unauthorized, unauthorizedResponse())
+                        return@post
+                    }
+
+                    call.respondTextWriter(
+                        contentType = ContentType("application", "x-ndjson"),
+                        status = HttpStatusCode.OK
+                    ) {
+                        val command = com.gtu.aiassistant.domain.chat.port.input.CreateChatWithAgentCommand(
+                            userId = principal.userId,
+                            message = request.toUserMessage()
+                        )
+
+                        dependencies.createChatWithAgentUseCase.stream(command) { token ->
+                            write("{\"t\":${Json.encodeToString(token)}}\n")
+                            flush()
+                        }.fold(
+                            ifLeft = { error ->
+                                write("{\"e\":${Json.encodeToString(error.toString())}}\n")
+                                flush()
+                            },
+                            ifRight = { result ->
+                                val finalJson = buildChatFinalJson(result.chat.toResponse())
+                                write("{\"d\":$finalJson}\n")
+                                flush()
+                            }
+                        )
+                    }
+                }
+
                 post("/chats/{chatId}/continue") {
                     val chatIdRaw = call.parameters["chatId"]
                     val request = call.receive<ContinueChatWithAgentRequest>()
@@ -153,6 +195,62 @@ internal fun Application.configureRoutes(
                             )
                         }
                     )
+                }
+
+                post("/chats/{chatId}/continue/stream") {
+                    val chatIdRaw = call.parameters["chatId"]
+                    val request = call.receive<ContinueChatWithAgentRequest>()
+                    val principal = call.principal<AuthenticatedUserPrincipal>()
+
+                    if (principal == null) {
+                        call.respond(HttpStatusCode.Unauthorized, unauthorizedResponse())
+                        return@post
+                    }
+
+                    if (chatIdRaw == null) {
+                        call.respond(
+                            HttpStatusCode.BadRequest,
+                            ApiErrorResponse(
+                                code = "missing_chat_id",
+                                message = "Path parameter 'chatId' is required"
+                            )
+                        )
+                        return@post
+                    }
+
+                    call.respondTextWriter(
+                        contentType = ContentType("application", "x-ndjson"),
+                        status = HttpStatusCode.OK
+                    ) {
+                        either {
+                            com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentCommand(
+                                chatId = ChatId.create(chatIdRaw).bind(),
+                                userId = principal.userId,
+                                message = request.toUserMessage()
+                            )
+                        }.fold(
+                            ifLeft = { domainError ->
+                                write("{\"e\":${Json.encodeToString(domainError.toString())}}\n")
+                                flush()
+                            },
+                            ifRight = { command ->
+                                dependencies.continueChatWithAgentUseCase.stream(command) { token ->
+                                    write("{\"t\":${Json.encodeToString(token)}}\n")
+                                    flush()
+                                }.fold(
+                                    ifLeft = { error ->
+                                        write("{\"e\":${Json.encodeToString(error.toString())}}\n")
+                                        flush()
+                                    },
+                                    ifRight = { result ->
+                                        val finalJson = buildChatFinalJson(result.chat.toResponse())
+                                        write("{\"d\":$finalJson}\n")
+                                        flush()
+                                    }
+                                )
+                            }
+                        )
+                    }
                 }
 
                 get("/chats") {
@@ -274,6 +372,9 @@ private fun com.gtu.aiassistant.domain.chat.model.Chat.toResponse(): ChatRespons
         }
     )
 
+private fun buildChatFinalJson(response: ChatResponse): String =
+    ndjsonJson.encodeToString(response)
+
 private fun com.gtu.aiassistant.domain.user.port.input.RegisterUserError.statusCode(): HttpStatusCode =
     when (this) {
         com.gtu.aiassistant.domain.user.port.input.RegisterUserError.EmailAlreadyTaken -> HttpStatusCode.Conflict
@@ -319,5 +420,3 @@ private fun com.gtu.aiassistant.domain.chat.port.input.DeleteChatError.statusCod
         is com.gtu.aiassistant.domain.chat.port.input.DeleteChatError.FindFailed -> HttpStatusCode.InternalServerError
         is com.gtu.aiassistant.domain.chat.port.input.DeleteChatError.DeleteFailed -> HttpStatusCode.InternalServerError
     }
-
-

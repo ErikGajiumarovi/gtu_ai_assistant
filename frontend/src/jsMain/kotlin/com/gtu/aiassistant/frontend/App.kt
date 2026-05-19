@@ -11,7 +11,8 @@ import org.jetbrains.compose.web.attributes.*
 import org.jetbrains.compose.web.css.*
 import org.jetbrains.compose.web.dom.*
 import org.jetbrains.compose.web.renderComposable
-import org.w3c.dom.*
+import org.w3c.dom.HTMLElement
+import org.w3c.dom.HTMLTextAreaElement
 
 private const val SESSION_KEY = "gtu-ai-assistant.session"
 private val sessionJson = Json { ignoreUnknownKeys = true }
@@ -31,7 +32,7 @@ fun App() {
     val scope = rememberCoroutineScope()
     val apiClient = remember { ApiClient() }
 
-    var notice by remember { mutableStateOf(Notice("info", "Workspace ready", "Sign in to open the chat workspace and talk to the assistant.")) }
+    var notice by remember { mutableStateOf<Notice?>(null) }
     var authMode by remember { mutableStateOf("login") }
     var session by remember { mutableStateOf(loadSession()) }
     var registeredUser by remember { mutableStateOf<UserResponse?>(null) }
@@ -40,20 +41,19 @@ fun App() {
     var chats by remember { mutableStateOf<List<ChatResponse>>(emptyList()) }
     var selectedChatId by remember { mutableStateOf("") }
     var chatSearch by remember { mutableStateOf("") }
-    var composerText by remember { mutableStateOf("") }
     var isRegistering by remember { mutableStateOf(false) }
     var isLoggingIn by remember { mutableStateOf(false) }
     var isRefreshingChats by remember { mutableStateOf(false) }
-    var isCreatingChat by remember { mutableStateOf(false) }
-    var isContinuingChat by remember { mutableStateOf(false) }
+
+    var isStreaming by remember { mutableStateOf(false) }
+    var streamingText by remember { mutableStateOf("") }
+    var pendingUserText by remember { mutableStateOf("") }
 
     val selectedChat = chats.find { it.id == selectedChatId }
-    val isSending = isCreatingChat || isContinuingChat
-    val deferredSearch = chatSearch.trim().lowercase()
-    val filteredChats = if (deferredSearch.isEmpty()) chats
-        else chats.filter { chat ->
-            getChatTitle(chat).lowercase().contains(deferredSearch) ||
-            getChatPreview(chat).lowercase().contains(deferredSearch)
+    val filteredChats = if (chatSearch.isBlank()) chats
+        else chats.filter { c ->
+            getChatTitle(c).lowercase().contains(chatSearch.lowercase()) ||
+            getChatPreview(c).lowercase().contains(chatSearch.lowercase())
         }
 
     SideEffect {
@@ -72,9 +72,9 @@ fun App() {
 
     LaunchedEffect(session) {
         if (session != null) {
-            refreshChats(apiClient, { chats = it }, { notice = it }, { isRefreshingChats = it })
+            refreshChats(apiClient, { chats = sortChats(it) }, { notice = it }, { isRefreshingChats = it })
         } else {
-            chats = emptyList(); selectedChatId = ""; composerText = ""
+            chats = emptyList(); selectedChatId = ""; pendingUserText = ""; streamingText = ""
         }
     }
 
@@ -83,80 +83,83 @@ fun App() {
         else Notice("error", title, error.message ?: "Unknown error")
     }
 
-    Div(attrs = { style { minHeight("100vh"); property("background", "radial-gradient(circle at top left, rgba(248,226,192,0.9), transparent 28%), radial-gradient(circle at top right, rgba(214,228,255,0.9), transparent 26%), linear-gradient(180deg, #f7f3ec 0%, #f3efe8 42%, #ece8df 100%)"); color("#0f172a") } }) {
-        val isGrid = session != null
-        Div(attrs = { style { margin("0 auto"); minHeight("100vh"); maxWidth("1680px"); property("display", if (isGrid) "grid" else "flex"); property("grid-template-columns", if (isGrid) "320px 1fr" else "none"); flexDirection(FlexDirection.Column) } }) {
-            if (session != null) {
+    Div(attrs = { style { property("min-height", "100vh"); backgroundColor(Color("#ffffff")); color(Color("#2d2d2d")) } }) {
+        if (session == null) {
+            AuthPage(
+                authMode = authMode, notice = notice, loginDraft = loginDraft, registrationDraft = registrationDraft,
+                registeredUser = registeredUser, isRegistering = isRegistering, isLoggingIn = isLoggingIn,
+                onSetAuthMode = { authMode = it },
+                onLoginDraftChange = { loginDraft = it }, onRegistrationDraftChange = { registrationDraft = it },
+                onLogin = { scope.launch {
+                    isLoggingIn = true
+                    try {
+                        val r = apiClient.login(LoginInRequest(loginDraft.email, loginDraft.password))
+                        session = SessionState(email = loginDraft.email.trim().lowercase(), jwt = r.jwt)
+                    } catch (e: Exception) { showError("Login failed", e) } finally { isLoggingIn = false }
+                } },
+                onRegister = { scope.launch {
+                    isRegistering = true
+                    try {
+                        val u = apiClient.registerUser(RegisterUserRequest(registrationDraft.name, registrationDraft.lastName, registrationDraft.email, registrationDraft.password))
+                        registeredUser = u; authMode = "login"
+                        loginDraft = LoginDraft(u.email, registrationDraft.password)
+                        registrationDraft = RegistrationDraft("", "", "", "")
+                        notice = Notice("success", "Account created", "${u.name} ${u.lastName} can now sign in.")
+                    } catch (e: Exception) { showError("Registration failed", e) } finally { isRegistering = false }
+                } }
+            )
+        } else {
+            Div(attrs = { style { display(DisplayMode.Grid); property("grid-template-columns", "260px 1fr"); property("height", "100vh") } }) {
                 Sidebar(
                     chats = filteredChats, selectedChatId = selectedChatId, session = session!!,
-                    isRefreshingChats = isRefreshingChats,
-                    onSelectChat = { selectedChatId = it }, onNewChat = {
-                        selectedChatId = ""; composerText = ""
-                        notice = Notice("info", "New chat", "Write the first message below to start a fresh conversation.")
-                    }, onLogout = {
-                        session = null; chats = emptyList(); selectedChatId = ""; composerText = ""
-                        notice = Notice("info", "Signed out", "The local session token has been cleared.")
-                    }, onSearchChange = { chatSearch = it },
-                    onRefresh = { scope.launch { refreshChats(apiClient, { chats = it }, { notice = it }, { isRefreshingChats = it }) } }
+                    isRefreshingChats = isRefreshingChats, isStreaming = isStreaming,
+                    onSelectChat = { selectedChatId = it; pendingUserText = ""; streamingText = "" },
+                    onNewChat = { selectedChatId = ""; pendingUserText = ""; streamingText = ""; chatSearch = ""; notice = null },
+                    onLogout = { session = null },
+                    onSearchChange = { chatSearch = it },
+                    onRefresh = { scope.launch { refreshChats(apiClient, { chats = sortChats(it) }, { notice = it }, { isRefreshingChats = it }) } }
                 )
-            }
+                ChatScreen(
+                    notice = notice, selectedChat = selectedChat, isStreaming = isStreaming,
+                    streamingText = streamingText, pendingUserText = pendingUserText,
+                    onDismissNotice = { notice = null },
+                    onSubmit = { text ->
+                        scope.launch {
+                            val trimmed = text.trim(); if (trimmed.isEmpty()) return@launch
+                            pendingUserText = trimmed; streamingText = ""; isStreaming = true
 
-            Main(attrs = { style { display(DisplayMode.Flex); flexDirection(FlexDirection.Column); flexGrow(1.0); property("min-height", "0"); property("overflow", if (session != null) "hidden" else "visible") } }) {
-                if (session == null) {
-                    AuthPage(
-                        authMode = authMode, notice = notice, loginDraft = loginDraft, registrationDraft = registrationDraft,
-                        registeredUser = registeredUser, isRegistering = isRegistering, isLoggingIn = isLoggingIn,
-                        onSetAuthMode = { authMode = it },
-                        onLoginDraftChange = { loginDraft = it }, onRegistrationDraftChange = { registrationDraft = it },
-                        onLogin = { scope.launch {
-                            isLoggingIn = true
-                            try {
-                                val r = apiClient.login(LoginInRequest(loginDraft.email, loginDraft.password))
-                                session = SessionState(email = loginDraft.email.trim().lowercase(), jwt = r.jwt)
-                            } catch (e: Exception) { showError("Login failed", e) } finally { isLoggingIn = false }
-                        } },
-                        onRegister = { scope.launch {
-                            isRegistering = true
-                            try {
-                                val u = apiClient.registerUser(RegisterUserRequest(registrationDraft.name, registrationDraft.lastName, registrationDraft.email, registrationDraft.password))
-                                registeredUser = u; authMode = "login"
-                                loginDraft = LoginDraft(u.email, registrationDraft.password)
-                                registrationDraft = RegistrationDraft("", "", "", "")
-                                notice = Notice("success", "Account created", "${u.name} ${u.lastName} can now sign in with ${u.email}.")
-                            } catch (e: Exception) { showError("Registration failed", e) } finally { isRegistering = false }
-                        } }
-                    )
-                } else {
-                    ChatScreen(
-                        notice = notice, selectedChat = selectedChat, composerText = composerText,
-                        isSending = isSending, isRefreshingChats = isRefreshingChats,
-                        onComposerChange = { composerText = it },
-                        onSubmit = { scope.launch {
-                            val text = composerText.trim(); if (text.isEmpty()) return@launch
                             if (selectedChat == null) {
-                                isCreatingChat = true
-                                try {
-                                    val chat = apiClient.createChatWithAgent(CreateChatWithAgentRequest(text))
-                                    chats = sortChats(listOf(chat) + chats.filter { it.id != chat.id })
-                                    selectedChatId = chat.id; composerText = ""
-                                } catch (e: Exception) {
-                                    if (isUnauthorized(e)) { session = null; notice = Notice("error", "Session expired", "Sign in again.") }
-                                    else showError("Unable to start chat", e)
-                                } finally { isCreatingChat = false }
+                                apiClient.createChatWithAgentStream(
+                                    CreateChatWithAgentRequest(trimmed),
+                                    onToken = { token -> streamingText += token },
+                                    onDone = { chat ->
+                                        chats = sortChats(listOf(chat) + chats.filter { it.id != chat.id })
+                                        selectedChatId = chat.id; isStreaming = false
+                                        streamingText = ""; pendingUserText = ""
+                                    },
+                                    onError = { error ->
+                                        isStreaming = false; streamingText = ""; pendingUserText = ""
+                                        showError("Chat failed", error)
+                                    }
+                                )
                             } else {
-                                isContinuingChat = true
-                                try {
-                                    val chat = apiClient.continueChatWithAgent(selectedChat.id, ContinueChatWithAgentRequest(text))
-                                    chats = sortChats(listOf(chat) + chats.filter { it.id != chat.id })
-                                    selectedChatId = chat.id; composerText = ""
-                                } catch (e: Exception) {
-                                    if (isUnauthorized(e)) { session = null; notice = Notice("error", "Session expired", "Sign in again.") }
-                                    else showError("Unable to send message", e)
-                                } finally { isContinuingChat = false }
+                                apiClient.continueChatWithAgentStream(
+                                    selectedChat.id, ContinueChatWithAgentRequest(trimmed),
+                                    onToken = { token -> streamingText += token },
+                                    onDone = { chat ->
+                                        chats = sortChats(listOf(chat) + chats.filter { it.id != chat.id })
+                                        selectedChatId = chat.id; isStreaming = false
+                                        streamingText = ""; pendingUserText = ""
+                                    },
+                                    onError = { error ->
+                                        isStreaming = false; streamingText = ""; pendingUserText = ""
+                                        showError("Response failed", error)
+                                    }
+                                )
                             }
-                        } }
-                    )
-                }
+                        }
+                    }
+                )
             }
         }
     }
@@ -164,51 +167,71 @@ fun App() {
 
 @Composable
 private fun AuthPage(
-    authMode: String, notice: Notice, loginDraft: LoginDraft, registrationDraft: RegistrationDraft,
+    authMode: String, notice: Notice?, loginDraft: LoginDraft, registrationDraft: RegistrationDraft,
     registeredUser: UserResponse?, isRegistering: Boolean, isLoggingIn: Boolean,
     onSetAuthMode: (String) -> Unit,
     onLoginDraftChange: (LoginDraft) -> Unit, onRegistrationDraftChange: (RegistrationDraft) -> Unit,
     onLogin: () -> Unit, onRegister: () -> Unit
 ) {
-    Div(attrs = { style { display(DisplayMode.Flex); flex("1"); alignItems(AlignItems.Center); padding(16.px, 24.px); property("padding-top", "2rem"); property("padding-bottom", "2rem") } }) {
-        Div(attrs = { style { margin("0 auto"); width("100%"); maxWidth("460px") } }) {
-            Section(attrs = { style { property("border-radius", "2.25rem"); border(1.px, LineStyle.Solid, Color("rgba(255,255,255,0.65)")); backgroundColor(Color("rgba(255,255,255,0.82)")); padding(24.px, 32.px); property("box-shadow", "0 24px 70px rgba(148,163,184,0.14)"); property("backdrop-filter", "blur(24px)") } }) {
-                Div(attrs = { style { display(DisplayMode.InlineFlex); property("border-radius", "9999px"); border(1.px, LineStyle.Solid, Color("#e2e8f0")); backgroundColor(Color("#f1f5f9")); padding(4.px) } }) {
-                    Button(attrs = {
-                        onClick { onSetAuthMode("login") }
-                        style { property("border-radius", "9999px"); padding(8.px, 16.px); fontSize(14.px); fontWeight("600"); property("background", if (authMode == "login") "white" else "transparent"); color(if (authMode == "login") Color("#0f172a") else Color("#64748b")); property("box-shadow", if (authMode == "login") "0 1px 3px rgba(0,0,0,0.1)" else "none") }
-                    }) { Text("Log in") }
-                    Button(attrs = {
-                        onClick { onSetAuthMode("register") }
-                        style { property("border-radius", "9999px"); padding(8.px, 16.px); fontSize(14.px); fontWeight("600"); property("background", if (authMode == "register") "white" else "transparent"); color(if (authMode == "register") Color("#0f172a") else Color("#64748b")); property("box-shadow", if (authMode == "register") "0 1px 3px rgba(0,0,0,0.1)" else "none") }
-                    }) { Text("Register") }
+    Div(attrs = { style { display(DisplayMode.Flex); alignItems(AlignItems.Center); justifyContent(JustifyContent.Center); property("min-height", "100vh"); backgroundColor(Color("#f7f7f8")); padding(16.px) } }) {
+        Div(attrs = { style { property("width", "100%"); property("max-width", "400px") } }) {
+            Div(attrs = { style { textAlign(TextAlign.Center); property("margin-bottom", "32px") } }) {
+                Span(attrs = { style { fontSize(32.px); fontWeight("700"); color(Color("#1a1a2e")) } }) { Text("GTU Assistant") }
+                P(attrs = { style { fontSize(14.px); color(Color("#666")); marginTop(8.px) } }) { Text("Sign in to your account") }
+            }
+            Div(attrs = { style { backgroundColor(Color("white")); border(1.px, LineStyle.Solid, Color("#e5e5e5")); property("border-radius", "12px"); padding(24.px) } }) {
+                Div(attrs = { style { display(DisplayMode.Flex); marginBottom(24.px) } }) {
+                    listOf("login" to "Sign In", "register" to "Sign Up").forEach { (mode, label) ->
+                        Button(attrs = {
+                            onClick { onSetAuthMode(mode) }
+                            style {
+                                flex(1.0); padding(10.px); fontSize(14.px); fontWeight("600")
+                                property("border-radius", "8px"); border(0.px)
+                                backgroundColor(if (authMode == mode) Color("#1a1a2e") else Color("transparent"))
+                                color(if (authMode == mode) Color("white") else Color("#666"))
+                                cursor("pointer")
+                            }
+                        }) { Text(label) }
+                    }
                 }
-
-                if (notice.tone != "info") { Div(attrs = { style { property("margin-top", "24px") } }) { NoticeBanner(notice = notice) } }
-
+                if (notice != null) { Div(attrs = { style { marginBottom(16.px) } }) { NoticeBanner(notice = notice) } }
                 if (authMode == "login") {
-                    Form(attrs = { onSubmit { it.preventDefault(); onLogin() }; style { property("margin-top", "24px") }; classes("space-y-4") }) {
-                        Div(attrs = { style { property("margin-bottom", "16px") } }) { P(attrs = { style { fontFamily("Sora, sans-serif"); fontSize(24.px); color(Color("#0f172a")); margin(0.px) } }) { Text("Welcome back") } }
+                    Form(attrs = { onSubmit { it.preventDefault(); onLogin() } }) {
                         Field("Email", "email", loginDraft.email) { onLoginDraftChange(loginDraft.copy(email = it)) }
+                        Spacer(16)
                         Field("Password", "password", loginDraft.password) { onLoginDraftChange(loginDraft.copy(password = it)) }
-                        PrimaryButton(busy = isLoggingIn, attrs = { attr("type", "submit") }) { Text("Log in") }
-                        P(attrs = { style { fontSize(14.px); color(Color("#64748b")) } }) {
-                            Text(registeredUser?.let { "Latest registered account: ${it.email}" } ?: "After registration, the login form is prefilled automatically.")
-                        }
+                        Spacer(24)
+                        Button(attrs = {
+                            disabled(isLoggingIn); attr("type", "submit")
+                            style {
+                                property("width", "100%"); padding(12.px); fontSize(14.px); fontWeight("600")
+                                property("border-radius", "8px"); border(0.px)
+                                backgroundColor(Color("#1a1a2e")); color(Color("white"))
+                                cursor(if (isLoggingIn) "not-allowed" else "pointer")
+                                property("opacity", if (isLoggingIn) "0.6" else "1")
+                            }
+                        }) { Text(if (isLoggingIn) "Signing in..." else "Sign in") }
                     }
                 } else {
-                    Form(attrs = { onSubmit { it.preventDefault(); onRegister() }; style { property("margin-top", "24px") }; classes("space-y-4") }) {
-                        Div(attrs = { style { property("margin-bottom", "16px") } }) {
-                            P(attrs = { style { fontFamily("Sora, sans-serif"); fontSize(24.px); color(Color("#0f172a")); margin(0.px) } }) { Text("Create account") }
-                            P(attrs = { style { property("margin-top", "8px"); fontSize(14.px); color(Color("#64748b")) } }) { Text("Open a user account first, then continue into the chat workspace.") }
-                        }
-                        Div(attrs = { style { display(DisplayMode.Grid); property("grid-template-columns", "1fr 1fr"); property("gap", "16px") } }) {
-                            Field("First name", "text", registrationDraft.name) { onRegistrationDraftChange(registrationDraft.copy(name = it)) }
-                            Field("Last name", "text", registrationDraft.lastName) { onRegistrationDraftChange(registrationDraft.copy(lastName = it)) }
-                        }
+                    Form(attrs = { onSubmit { it.preventDefault(); onRegister() } }) {
+                        Field("First name", "text", registrationDraft.name) { onRegistrationDraftChange(registrationDraft.copy(name = it)) }
+                        Spacer(16)
+                        Field("Last name", "text", registrationDraft.lastName) { onRegistrationDraftChange(registrationDraft.copy(lastName = it)) }
+                        Spacer(16)
                         Field("Email", "email", registrationDraft.email) { onRegistrationDraftChange(registrationDraft.copy(email = it)) }
+                        Spacer(16)
                         Field("Password", "password", registrationDraft.password) { onRegistrationDraftChange(registrationDraft.copy(password = it)) }
-                        PrimaryButton(busy = isRegistering, attrs = { attr("type", "submit") }) { Text("Register") }
+                        Spacer(24)
+                        Button(attrs = {
+                            disabled(isRegistering); attr("type", "submit")
+                            style {
+                                property("width", "100%"); padding(12.px); fontSize(14.px); fontWeight("600")
+                                property("border-radius", "8px"); border(0.px)
+                                backgroundColor(Color("#1a1a2e")); color(Color("white"))
+                                cursor(if (isRegistering) "not-allowed" else "pointer")
+                                property("opacity", if (isRegistering) "0.6" else "1")
+                            }
+                        }) { Text(if (isRegistering) "Creating account..." else "Create account") }
                     }
                 }
             }
@@ -218,98 +241,154 @@ private fun AuthPage(
 
 @Composable
 private fun ChatScreen(
-    notice: Notice, selectedChat: ChatResponse?, composerText: String,
-    isSending: Boolean, isRefreshingChats: Boolean,
-    onComposerChange: (String) -> Unit, onSubmit: () -> Unit
+    notice: Notice?, selectedChat: ChatResponse?,
+    isStreaming: Boolean, streamingText: String, pendingUserText: String,
+    onDismissNotice: () -> Unit,
+    onSubmit: (String) -> Unit
 ) {
-    val messageViewportRef = remember { mutableStateOf<HTMLElement?>(null) }
+    val scrollRef = remember { mutableStateOf<HTMLElement?>(null) }
+    var composerText by remember { mutableStateOf("") }
 
-    LaunchedEffect(selectedChat?.id, selectedChat?.messages?.size) {
-        messageViewportRef.value?.let { it.scrollTop = it.scrollHeight.toDouble() }
+    LaunchedEffect(selectedChat?.id, streamingText, pendingUserText) {
+        scrollRef.value?.scrollIntoView(false)
     }
 
-    Div(attrs = { style { display(DisplayMode.Flex); flexDirection(FlexDirection.Column); flexGrow(1.0); property("min-height", "0"); property("gap", "20px"); padding(20.px, 24.px) } }) {
-        if (notice.tone != "info") { NoticeBanner(notice = notice) }
+    Div(attrs = { style { display(DisplayMode.Flex); flexDirection(FlexDirection.Column); property("height", "100vh") } }) {
+        Div(attrs = { style { flexGrow(1.0); property("overflow-y", "auto"); padding(0.px) } }) {
+            Div(attrs = { style { property("max-width", "768px"); margin("0 auto"); padding(32.px, 24.px) } }) {
+                if (notice != null && notice.tone != "info") {
+                    NoticeBanner(notice = notice)
+                    Spacer(16)
+                }
 
-        Section(attrs = { style { display(DisplayMode.Flex); flexDirection(FlexDirection.Column); flexGrow(1.0); property("min-height", "0"); property("overflow", "hidden"); property("border-radius", "2rem"); border(1.px, LineStyle.Solid, Color("rgba(255,255,255,0.6)")); backgroundColor(Color("rgba(255,255,255,0.7)")); property("box-shadow", "0 24px 70px rgba(148,163,184,0.12)"); property("backdrop-filter", "blur(24px)") } }) {
-            Div(attrs = {
-                ref { messageViewportRef.value = it }
-                style { flexGrow(1.0); property("min-height", "0"); property("overflow-y", "auto"); padding(20.px, 24.px) }
-            }) {
-                if (selectedChat != null) {
-                    for (message in selectedChat.messages) {
-                        val isUser = message.senderType == "USER"
-                        val citations = message.citations
+                val existingMessages = selectedChat?.messages ?: emptyList()
+                val hasAnyContent = existingMessages.isNotEmpty() || pendingUserText.isNotEmpty() || isStreaming
 
-                        Div(attrs = { style { display(DisplayMode.Flex); justifyContent(if (isUser) JustifyContent.End else JustifyContent.Start); property("margin-bottom", "16px") } }) {
-                            Div(attrs = { style { maxWidth("48rem"); property("border-radius", "1.75rem"); padding(12.px, 16.px); property("background", if (isUser) "#0f172a" else "white"); color(if (isUser) Color("white") else Color("#1e293b")); border(1.px, LineStyle.Solid, if (isUser) Color("transparent") else Color("#e2e8f0")); property("box-shadow", if (isUser) "0 20px 40px rgba(15,23,42,0.16)" else "0 16px 34px rgba(148,163,184,0.14)") } }) {
-                                Div(attrs = { style { display(DisplayMode.Flex); alignItems(AlignItems.Center); property("gap", "8px"); fontSize(11.px); fontWeight("600"); property("text-transform", "uppercase"); property("letter-spacing", "0.18em"); property("margin-bottom", "8px") } }) {
-                                    Span(attrs = { style { color(if (isUser) Color("rgba(255,255,255,0.72)") else Color("#64748b")) } }) { Text(if (isUser) "You" else "Assistant") }
-                                    Span(attrs = { style { color(if (isUser) Color("rgba(255,255,255,0.5)") else Color("#94a3b8")) } }) { Text(formatMessageTime(message.createdAt)) }
-                                }
-                                P(attrs = { style { fontSize(15.px); margin(0.px); whiteSpace("pre-wrap"); lineHeight(1.75) } }) { Text(message.originalText) }
-                                if (!isUser && citations.isNotEmpty()) {
-                                    Div(attrs = { style { display(DisplayMode.Flex); property("flex-wrap", "wrap"); property("gap", "8px"); property("margin-top", "16px"); borderTop(1.px, LineStyle.Solid, Color("#f1f5f9")); paddingTop(12.px) } }) {
-                                        for (citation in citations) {
-                                            A(href = citation.url, attrs = {
-                                                target("_blank"); rel("noreferrer")
-                                                title(citation.snippet.ifEmpty { citation.title })
-                                                style { property("border-radius", "9999px"); border(1.px, LineStyle.Solid, Color("#e2e8f0")); backgroundColor(Color("#f8fafc")); padding(4.px, 12.px); fontSize(11.px); fontWeight("600"); property("text-transform", "uppercase"); property("letter-spacing", "0.12em"); color(Color("#64748b")); cursor("pointer") }
-                                            }) {
-                                                Text("${if (citation.sourceType == "WEB") "Web" else "GTU"} \u00B7 ${citation.title.ifEmpty { getHostname(citation.url) }}")
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                if (!hasAnyContent) {
+                    Div(attrs = { style { textAlign(TextAlign.Center); paddingTop(120.px) } }) {
+                        Span(attrs = { style { fontSize(48.px); color(Color("#e0e0e0")) } }) { Text("\uD83C\uDF93") }
+                        P(attrs = { style { fontSize(18.px); fontWeight("600"); color(Color("#333")); marginTop(16.px) } }) { Text("How can I help you?") }
+                        P(attrs = { style { fontSize(14.px); color(Color("#888")); marginTop(8.px) } }) { Text("Ask me anything about Georgian Technical University") }
                     }
                 }
+
+                for (message in existingMessages) {
+                    val isUser = message.senderType == "USER"
+                    MessageBubble(
+                        text = message.originalText,
+                        isUser = isUser,
+                        time = formatMessageTime(message.createdAt),
+                        citations = if (!isUser) message.citations else emptyList()
+                    )
+                    Spacer(12)
+                }
+
+                if (pendingUserText.isNotEmpty()) {
+                    MessageBubble(text = pendingUserText, isUser = true, time = "")
+                    Spacer(12)
+                }
+
+                if (isStreaming) {
+                    MessageBubble(text = streamingText, isUser = false, time = "", isStreaming = true)
+                    Spacer(12)
+                }
+
+                Div(attrs = { ref { scrollRef.value = it }; style { height(1.px) } })
             }
+        }
 
-            Form(attrs = { onSubmit { it.preventDefault(); onSubmit() }; style { borderTop(1.px, LineStyle.Solid, Color("rgba(15,23,42,0.08)")); padding(16.px, 24.px) } }) {
-                Div(attrs = { style { property("border-radius", "1.75rem"); border(1.px, LineStyle.Solid, Color("#e2e8f0")); backgroundColor(Color("white")); padding(12.px); property("box-shadow", "0 18px 42px rgba(148,163,184,0.14)") } }) {
+        Div(attrs = { style { borderTop(1.px, LineStyle.Solid, Color("#e5e5e5")); padding(16.px, 24.px); backgroundColor(Color("white")) } }) {
+            Form(attrs = { onSubmit { it.preventDefault(); onSubmit(composerText); composerText = "" }; style { property("max-width", "768px"); margin("0 auto") } }) {
+                Div(attrs = { style { display(DisplayMode.Flex); property("gap", "8px"); alignItems(AlignItems.FlexEnd) } }) {
                     val textareaRef = remember { mutableStateOf<HTMLTextAreaElement?>(null) }
-
                     LaunchedEffect(composerText) {
                         textareaRef.value?.let { ta ->
-                            val lineHeight = 1.75 * 15
-                            val maxHeight = lineHeight * 10 + 16
                             ta.style.height = "0px"
-                            ta.style.height = "${kotlin.math.min(ta.scrollHeight.toDouble(), maxHeight)}px"
-                            ta.style.overflowY = if (ta.scrollHeight.toDouble() > maxHeight) "auto" else "hidden"
+                            ta.style.height = "${kotlin.math.min(ta.scrollHeight.toDouble(), 200.0)}px"
+                            ta.style.overflowY = if (ta.scrollHeight.toDouble() > 200.0) "auto" else "hidden"
                         }
                     }
-
                     TextArea(attrs = {
                         ref { textareaRef.value = it }
                         value(composerText)
                         rows(1)
-                        placeholder(if (selectedChat != null) "Reply to the assistant..." else "Message the assistant to begin a new conversation...")
-                        onInput { event -> onComposerChange((event.target as HTMLTextAreaElement).value) }
-                        style { width("100%"); property("resize", "none"); property("overflow", "hidden"); border(0.px); fontSize(15.px); color(Color("#0f172a")); property("outline", "none"); property("max-height", "280px"); backgroundColor(Color("transparent")) }
+                        disabled(isStreaming)
+                        placeholder("Message GTU Assistant...")
+                        onInput { event -> composerText = (event.target as HTMLTextAreaElement).value }
+                        style {
+                            flex(1.0); property("resize", "none"); padding(12.px, 16.px)
+                            property("border-radius", "12px"); border(1.px, LineStyle.Solid, Color("#e5e5e5"))
+                            fontSize(14.px); property("outline", "none"); backgroundColor(Color("#fafafa"))
+                            property("max-height", "200px"); property("line-height", "1.5")
+                            property("opacity", if (isStreaming) "0.5" else "1")
+                        }
                     })
+                    Button(attrs = {
+                        disabled(isStreaming || composerText.trim().isEmpty())
+                        attr("type", "submit")
+                        style {
+                            width(40.px); height(40.px); padding(0.px)
+                            property("border-radius", "10px"); border(0.px)
+                            backgroundColor(if (composerText.trim().isNotEmpty() && !isStreaming) Color("#1a1a2e") else Color("#e5e5e5"))
+                            color(Color("white")); cursor(if (isStreaming || composerText.trim().isEmpty()) "not-allowed" else "pointer")
+                            display(DisplayMode.Flex); alignItems(AlignItems.Center); justifyContent(JustifyContent.Center)
+                            property("flex-shrink", "0")
+                        }
+                    }) { Span(attrs = { style { fontSize(18.px) } }) { Text("\u2191") } }
+                }
+            }
+        }
+    }
+}
 
-                    Div(attrs = { style { display(DisplayMode.Flex); justifyContent(JustifyContent.SpaceBetween); alignItems(AlignItems.Center); property("margin-top", "12px"); borderTop(1.px, LineStyle.Solid, Color("#f1f5f9")); paddingTop(12.px) } }) {
-                        Span(attrs = { style { fontSize(12.px); color(Color("#64748b")) } }) { Text("\u25CF") }
-
-                        Button(attrs = {
-                            disabled(isSending || composerText.trim().isEmpty())
-                            attr("type", "submit")
+@Composable
+private fun MessageBubble(
+    text: String, isUser: Boolean, time: String,
+    citations: List<CitationResponse> = emptyList(),
+    isStreaming: Boolean = false
+) {
+    Div(attrs = { style { display(DisplayMode.Flex); justifyContent(if (isUser) JustifyContent.End else JustifyContent.Start) } }) {
+        Div(attrs = { style { property("max-width", "85%") } }) {
+            Div(attrs = {
+                style {
+                    property("border-radius", if (isUser) "18px 18px 4px 18px" else "18px 18px 18px 4px")
+                    padding(12.px, 18.px)
+                    backgroundColor(if (isUser) Color("#1a1a2e") else Color("#f7f7f8"))
+                    color(if (isUser) Color("white") else Color("#2d2d2d"))
+                    fontSize(15.px); property("line-height", "1.6"); whiteSpace("pre-wrap")
+                    property("word-break", "break-word")
+                    property("box-shadow", "0 1px 2px rgba(0,0,0,0.05)")
+                }
+            }) {
+                if (isStreaming && text.isEmpty()) {
+                    Span(attrs = { style { property("animation", "blink 1s infinite") } }) { Text("\u258C") }
+                } else {
+                    Text(text)
+                    if (isStreaming) {
+                        Span(attrs = { style { property("animation", "blink 1s infinite"); color(Color("#888")) } }) { Text("\u258C") }
+                    }
+                }
+            }
+            if (!isUser && citations.isNotEmpty()) {
+                Div(attrs = { style { display(DisplayMode.Flex); property("flex-wrap", "wrap"); property("gap", "6px"); marginTop(8.px) } }) {
+                    for (citation in citations) {
+                        A(href = citation.url, attrs = {
+                            target("_blank"); rel("noreferrer noopener")
+                            title(citation.snippet.ifEmpty { citation.title })
                             style {
-                                display(DisplayMode.InlineFlex); alignItems(AlignItems.Center); justifyContent(JustifyContent.Center); property("gap", "8px")
-                                property("border-radius", "9999px"); backgroundColor(Color("#0f172a")); padding(10.px, 16.px)
-                                fontSize(14.px); fontWeight("600"); color(Color("white"))
-                                property("box-shadow", "0 16px 34px rgba(15,23,42,0.18)")
-                                property("opacity", if (isSending || composerText.trim().isEmpty()) "0.55" else "1")
-                                property("cursor", if (isSending || composerText.trim().isEmpty()) "not-allowed" else "pointer")
+                                fontSize(12.px); color(Color("#666")); textDecoration("none")
+                                padding(4.px, 10.px); property("border-radius", "6px")
+                                border(1.px, LineStyle.Solid, Color("#e5e5e5"))
+                                backgroundColor(Color("#fafafa"))
                             }
                         }) {
-                            Text(if (isSending) "\u21BB" else "\u2192")
-                            Text(if (selectedChat != null) "Send message" else "Start chat")
+                            Text("${if (citation.sourceType == "WEB") "\uD83C\uDF10" else "\uD83C\uDFDB"} ${citation.title.ifEmpty { getHostname(citation.url) }}")
                         }
                     }
                 }
+            }
+            if (time.isNotEmpty()) {
+                Span(attrs = { style { fontSize(11.px); color(Color("#999")); marginTop(4.px); display(DisplayMode.Block) } }) { Text(time) }
             }
         }
     }
@@ -318,64 +397,55 @@ private fun ChatScreen(
 @Composable
 private fun Sidebar(
     chats: List<ChatResponse>, selectedChatId: String, session: SessionState,
-    isRefreshingChats: Boolean,
+    isRefreshingChats: Boolean, isStreaming: Boolean,
     onSelectChat: (String) -> Unit, onNewChat: () -> Unit, onLogout: () -> Unit,
     onSearchChange: (String) -> Unit, onRefresh: () -> Unit
 ) {
-    Aside(attrs = { style { borderBottom(1.px, LineStyle.Solid, Color("rgba(15,23,42,0.08)")); property("background", "rgba(255,255,255,0.65)"); property("backdrop-filter", "blur(24px)") } }) {
-        Div(attrs = { style { display(DisplayMode.Flex); flexDirection(FlexDirection.Column); property("gap", "24px"); padding(16.px, 24.px); height("100%") } }) {
+    Aside(attrs = { style { backgroundColor(Color("#171717")); color(Color("white")); display(DisplayMode.Flex); flexDirection(FlexDirection.Column); property("height", "100vh") } }) {
+        Div(attrs = { style { padding(16.px); flexGrow(1.0); display(DisplayMode.Flex); flexDirection(FlexDirection.Column) } }) {
             Button(attrs = {
                 onClick { onNewChat() }
-                style { display(DisplayMode.InlineFlex); alignItems(AlignItems.Center); justifyContent(JustifyContent.Center); property("gap", "8px"); property("border-radius", "1.35rem"); backgroundColor(Color("#0f172a")); padding(12.px, 16.px); fontSize(14.px); fontWeight("600"); color(Color("white")); property("box-shadow", "0 16px 34px rgba(15,23,42,0.15)"); width("100%") }
-            }) { Text("\u2728 New chat") }
-
-            Section(attrs = { style { property("border-radius", "1.75rem"); border(1.px, LineStyle.Solid, Color("rgba(15,23,42,0.08)")); property("background", "rgba(255,255,255,0.85)"); padding(16.px); property("box-shadow", "0 16px 32px rgba(148,163,184,0.12)") } }) {
-                Input(type = InputType.Text, attrs = {
-                    placeholder("Search chats")
-                    onInput { event -> onSearchChange((event.target as HTMLInputElement).value) }
-                    style { width("100%"); property("border-radius", "1.1rem"); border(1.px, LineStyle.Solid, Color("#e2e8f0")); backgroundColor(Color("#f8fafc")); padding(10.px, 12.px); fontSize(14.px); color(Color("#0f172a")); property("outline", "none") }
-                })
-
-                Div(attrs = { style { display(DisplayMode.Flex); justifyContent(JustifyContent.SpaceBetween); alignItems(AlignItems.Center); property("margin-top", "16px"); fontSize(12.px); fontWeight("500"); color(Color("#64748b")) } }) {
-                    Span { Text("Recent conversations") }
-                    Span { Text("${chats.size}") }
+                style {
+                    property("width", "100%"); padding(12.px); fontSize(14.px); fontWeight("500")
+                    property("border-radius", "8px"); border(1.px, LineStyle.Solid, Color("rgba(255,255,255,0.2)"))
+                    backgroundColor(Color("transparent")); color(Color("white"))
+                    cursor("pointer"); marginBottom(16.px)
                 }
+            }) { Text("+ New chat") }
 
-                Div(attrs = { style { display(DisplayMode.Flex); flexDirection(FlexDirection.Column); property("gap", "8px"); property("margin-top", "12px"); property("max-height", if (chats.isNotEmpty()) "40vh" else "none"); property("overflow-y", "auto") } }) {
-                    if (chats.isEmpty()) {
-                        SidebarEmptyState("No conversations", "Start a new chat to populate the workspace.")
-                    } else {
-                        for (chat in chats) {
-                            val selected = chat.id == selectedChatId
-                            Button(attrs = {
-                                onClick { onSelectChat(chat.id) }
-                                style { display(DisplayMode.Block); width("100%"); property("border-radius", "1.3rem"); padding(12.px, 16.px); textAlign(TextAlign.Left); property("background", if (selected) "#0f172a" else "#f8fafc"); color(if (selected) Color("white") else Color("#0f172a")); border(1.px, LineStyle.Solid, if (selected) Color("#0f172a") else Color("#e2e8f0")); property("box-shadow", if (selected) "0 14px 28px rgba(15,23,42,0.16)" else "none") }
-                            }) {
-                                Div(attrs = { style { display(DisplayMode.Flex); justifyContent(JustifyContent.SpaceBetween); alignItems(AlignItems.FlexStart); property("gap", "12px") } }) {
-                                    Div(attrs = { style { property("min-width", "0"); property("flex", "1") } }) {
-                                        P(attrs = { style { fontSize(14.px); fontWeight("600"); margin(0.px); property("white-space", "nowrap"); property("overflow", "hidden"); property("text-overflow", "ellipsis") } }) { Text(getChatTitle(chat)) }
-                                        P(attrs = { style { fontSize(12.px); property("margin-top", "4px"); color(if (selected) Color("rgba(255,255,255,0.72)") else Color("#64748b")) } }) { Text(getChatPreview(chat)) }
-                                    }
-                                    Span(attrs = { style { property("border-radius", "9999px"); padding(4.px, 8.px); fontSize(10.px); fontWeight("600"); property("text-transform", "uppercase"); property("letter-spacing", "0.18em"); property("background", if (selected) "rgba(255,255,255,0.1)" else "#e2e8f0"); color(if (selected) "rgba(255,255,255,0.8)" else "#64748b") } }) { Text(formatSidebarDate(chat.updatedAt)) }
-                                }
+            Div(attrs = { style { display(DisplayMode.Flex); flexDirection(FlexDirection.Column); flexGrow(1.0); property("overflow-y", "auto") } }) {
+                if (chats.isEmpty()) {
+                    P(attrs = { style { fontSize(13.px); color(Color("rgba(255,255,255,0.4)")); padding(8.px) } }) { Text("No conversations yet") }
+                } else {
+                    for (chat in chats) {
+                        val selected = chat.id == selectedChatId
+                        Button(attrs = {
+                            onClick { onSelectChat(chat.id) }
+                            disabled(isStreaming)
+                            style {
+                                display(DisplayMode.Block); property("width", "100%"); textAlign(TextAlign.Left); cursor(if (isStreaming) "not-allowed" else "pointer")
+                                padding(10.px, 12.px); fontSize(14.px); property("border-radius", "8px"); border(0.px)
+                                backgroundColor(if (selected) Color("rgba(255,255,255,0.1)") else Color("transparent"))
+                                color(if (selected) Color("white") else Color("rgba(255,255,255,0.7)"))
+                                property("margin-bottom", "2px")
                             }
+                        }) {
+                            Div(attrs = { style { fontSize(14.px); fontWeight("500"); whiteSpace("nowrap"); property("overflow", "hidden"); property("text-overflow", "ellipsis") } }) { Text(getChatTitle(chat)) }
+                            Div(attrs = { style { fontSize(12.px); color(Color("rgba(255,255,255,0.4)")); whiteSpace("nowrap"); property("overflow", "hidden"); property("text-overflow", "ellipsis"); marginTop(2.px) } }) { Text(getChatPreview(chat)) }
                         }
                     }
                 }
             }
 
-            Section(attrs = { style { property("margin-top", "auto"); property("border-radius", "1.75rem"); border(1.px, LineStyle.Solid, Color("rgba(15,23,42,0.08)")); property("background", "rgba(255,255,255,0.85)"); padding(16.px); property("box-shadow", "0 16px 32px rgba(148,163,184,0.12)") } }) {
-                Div(attrs = { style { display(DisplayMode.Flex); alignItems(AlignItems.FlexStart); property("gap", "12px") } }) {
-                    Div(attrs = { style { display(DisplayMode.Flex); width(44.px); height(44.px); alignItems(AlignItems.Center); justifyContent(JustifyContent.Center); property("border-radius", "1rem"); backgroundColor(Color("#0f172a")); fontSize(14.px); fontWeight("600"); color(Color("white")); property("flex-shrink", "0") } }) { Text(session.email.slice(0..1).uppercase()) }
-                    Div(attrs = { style { property("min-width", "0") } }) {
-                        P(attrs = { style { fontSize(12.px); fontWeight("600"); property("letter-spacing", "0.18em"); color(Color("#64748b")); property("text-transform", "uppercase"); margin(0.px) } }) { Text("Active session") }
-                        P(attrs = { style { fontSize(14.px); fontWeight("600"); color(Color("#0f172a")); property("margin-top", "4px"); property("white-space", "nowrap"); property("overflow", "hidden"); property("text-overflow", "ellipsis") } }) { Text(session.email) }
-                    }
+            Div(attrs = { style { borderTop(1.px, LineStyle.Solid, Color("rgba(255,255,255,0.1)")); paddingTop(12.px) } }) {
+                Div(attrs = { style { display(DisplayMode.Flex); alignItems(AlignItems.Center); gap(10.px); marginBottom(12.px) } }) {
+                    Div(attrs = { style { width(32.px); height(32.px); property("border-radius", "6px"); backgroundColor(Color("#333")); display(DisplayMode.Flex); alignItems(AlignItems.Center); justifyContent(JustifyContent.Center); fontSize(14.px); fontWeight("600") } }) { Text(session.email.take(2).uppercase()) }
+                    Span(attrs = { style { fontSize(13.px); color(Color("rgba(255,255,255,0.7)")) } }) { Text(session.email) }
                 }
                 Button(attrs = {
                     onClick { onLogout() }
-                    style { display(DisplayMode.InlineFlex); width("100%"); alignItems(AlignItems.Center); justifyContent(JustifyContent.Center); property("gap", "8px"); property("margin-top", "16px"); property("border-radius", "1.1rem"); border(1.px, LineStyle.Solid, Color("#e2e8f0")); backgroundColor(Color("#f8fafc")); padding(10.px, 16.px); fontSize(14.px); fontWeight("500"); color(Color("#64748b")) }
-                }) { Text("\u2190 Log out") }
+                    style { property("width", "100%"); padding(8.px); fontSize(13.px); property("border-radius", "6px"); border(0.px); backgroundColor(Color("rgba(255,255,255,0.1)")); color(Color("rgba(255,255,255,0.6)")); cursor("pointer") }
+                }) { Text("Log out") }
             }
         }
     }
@@ -383,60 +453,36 @@ private fun Sidebar(
 
 @Composable
 private fun Field(label: String, type: String, value: String, onChange: (String) -> Unit) {
-    Div(attrs = { style { display(DisplayMode.Block) } }) {
-        Span(attrs = { style { display(DisplayMode.Block); property("margin-bottom", "8px"); fontSize(12.px); fontWeight("600"); property("letter-spacing", "0.18em"); color(Color("#64748b")); property("text-transform", "uppercase") } }) { Text(label) }
-        Input(type = if (type == "password") InputType.Password else if (type == "email") InputType.Text else InputType.Text, attrs = {
+    Div(attrs = { style { marginBottom(0.px) } }) {
+        Span(attrs = { style { display(DisplayMode.Block); fontSize(12.px); fontWeight("600"); color(Color("#555")); marginBottom(6.px) } }) { Text(label) }
+        Input(type = if (type == "password") InputType.Password else InputType.Text, attrs = {
             if (type == "email") attr("type", "email")
             value(value)
             attr("required", "")
             onInput { event -> onChange((event.target as HTMLInputElement).value) }
-            style { width("100%"); property("border-radius", "1.1rem"); border(1.px, LineStyle.Solid, Color("#e2e8f0")); backgroundColor(Color("#f8fafc")); padding(12.px, 16.px); fontSize(14.px); color(Color("#0f172a")); property("outline", "none") }
+            style { property("width", "100%"); padding(10.px, 12.px); fontSize(14.px); property("border-radius", "8px"); border(1.px, LineStyle.Solid, Color("#e5e5e5")); backgroundColor(Color("#fafafa")); property("outline", "none") }
         })
     }
 }
 
 @Composable
-private fun PrimaryButton(busy: Boolean, attrs: (AttrsBuilder<HTMLButtonElement>.() -> Unit)? = null, content: @Composable () -> Unit) {
-    Button(attrs = {
-        disabled(busy)
-        style {
-            display(DisplayMode.InlineFlex); width("100%"); alignItems(AlignItems.Center); justifyContent(JustifyContent.Center); property("gap", "8px")
-            property("border-radius", "1.1rem"); backgroundColor(Color("#0f172a")); padding(12.px, 16.px)
-            fontSize(14.px); fontWeight("600"); color(Color("white"))
-            property("box-shadow", "0 16px 34px rgba(15,23,42,0.16)")
-            property("cursor", if (busy) "not-allowed" else "pointer")
-            property("opacity", if (busy) "0.6" else "1")
-        }
-        if (attrs != null) attrs()
-    }) {
-        if (busy) { Span { Text("\u21BB") }; Text("Working...") }
-        else content()
-    }
-}
-
-@Composable
 private fun NoticeBanner(notice: Notice) {
-    val borderColor = when (notice.tone) {
-        "success" -> "#a7f3d0"; "error" -> "#fecaca"; else -> "#e2e8f0"
+    val (borderColor, bgColor, textColor) = when (notice.tone) {
+        "success" -> Triple("#a7f3d0", "#ecfdf5", "#065f46")
+        "error" -> Triple("#fecaca", "#fef2f2", "#991b1b")
+        else -> Triple("#e5e5e5", "#fafafa", "#555")
     }
-    val bgColor = when (notice.tone) {
-        "success" -> "#ecfdf5"; "error" -> "#fff1f2"; else -> "white"
-    }
-    val textColor = when (notice.tone) {
-        "success" -> "#064e3b"; "error" -> "#991b1b"; else -> "#334155"
-    }
-    Div(attrs = { style { property("border-radius", "1.4rem"); border(1.px, LineStyle.Solid, Color(borderColor)); backgroundColor(Color(bgColor)); color(Color(textColor)); padding(12.px, 16.px) } }) {
-        P(attrs = { style { fontWeight("600"); margin(0.px) } }) { Text(notice.title) }
-        P(attrs = { style { property("margin-top", "4px"); fontSize(14.px); margin(0.px) } }) { Text(notice.detail) }
+    Div(attrs = { style { property("border-radius", "8px"); border(1.px, LineStyle.Solid, Color(borderColor)); backgroundColor(Color(bgColor)); color(Color(textColor)); padding(12.px, 16.px); fontSize(14.px) } }) {
+        Div(attrs = { style { fontWeight("600") } }) { Text(notice.title) }
+        if (notice.detail.isNotBlank()) {
+            Div(attrs = { style { marginTop(4.px); fontSize(13.px) } }) { Text(notice.detail) }
+        }
     }
 }
 
 @Composable
-private fun SidebarEmptyState(title: String, detail: String) {
-    Div(attrs = { style { property("border-radius", "1.3rem"); border(1.px, LineStyle.Dashed, Color("#e2e8f0")); backgroundColor(Color("#f8fafc")); padding(16.px, 24.px); textAlign(TextAlign.Center) } }) {
-        P(attrs = { style { fontWeight("600"); color(Color("#334155")); margin(0.px) } }) { Text(title) }
-        P(attrs = { style { property("margin-top", "8px"); fontSize(14.px); color(Color("#64748b")); margin(0.px) } }) { Text(detail) }
-    }
+private fun Spacer(height: Int) {
+    Div(attrs = { style { height(height.px) } })
 }
 
 private fun sortChats(chats: List<ChatResponse>): List<ChatResponse> =
@@ -455,38 +501,27 @@ private fun getChatPreview(chat: ChatResponse): String {
 private fun truncate(value: String, length: Int): String =
     if (value.length <= length) value else "${value.slice(0 until length - 1)}..."
 
-private fun formatSidebarDate(value: String): String {
-    try {
-        val parts = value.split("T").firstOrNull()?.split("-") ?: return value
-        if (parts.size != 3) return value
-        val monthNames = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
-        val month = parts[1].toIntOrNull()?.let { monthNames.getOrNull(it - 1) } ?: parts[1]
-        val day = parts[2].toIntOrNull()?.toString() ?: parts[2]
-        return "$month $day"
-    } catch (_: Exception) { return value }
-}
-
 private fun formatMessageTime(value: String): String {
     try {
         val parts = value.split("T")
-        if (parts.size < 2) return value
+        if (parts.size < 2) return ""
         val timeParts = parts[1].split(":").take(2)
-        val hour = timeParts.getOrNull(0)?.toIntOrNull() ?: return value
+        val hour = timeParts.getOrNull(0)?.toIntOrNull() ?: return ""
         val minute = timeParts.getOrNull(1) ?: "00"
         val ampm = if (hour >= 12) "PM" else "AM"
         val h = if (hour == 0) 12 else if (hour > 12) hour - 12 else hour
         return "$h:$minute $ampm"
-    } catch (_: Exception) { return value }
+    } catch (_: Exception) { return "" }
 }
-
-private fun isUnauthorized(error: Exception): Boolean =
-    error is ApiClientError && error.status == 401
 
 private fun getHostname(url: String): String {
     return try {
         url.removePrefix("https://").removePrefix("http://").split("/").firstOrNull() ?: url
     } catch (_: Exception) { url }
 }
+
+private fun isUnauthorized(error: Exception): Boolean =
+    error is ApiClientError && error.status == 401
 
 private fun saveSession(session: SessionState) {
     localStorage.setItem(SESSION_KEY, sessionJson.encodeToString(session))
@@ -510,7 +545,7 @@ private suspend fun refreshChats(
         onChats(sortChats(apiClient.listChats()))
     } catch (error: Exception) {
         if (error is ApiClientError && error.status == 401) {
-            onNotice(Notice("error", "Session expired", "The saved token is no longer valid. Sign in again to continue."))
+            onNotice(Notice("error", "Session expired", "Sign in again to continue."))
         } else {
             val msg = if (error is ApiClientError) "${error.code}: ${error.message}" else error.message ?: "Unknown error"
             onNotice(Notice("error", "Unable to load chats", msg))

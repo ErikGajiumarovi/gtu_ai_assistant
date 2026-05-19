@@ -8,8 +8,12 @@ import com.gtu.aiassistant.domain.model.DomainError
 import com.gtu.aiassistant.domain.model.InfrastructureError
 import com.gtu.aiassistant.domain.user.model.UserId
 
-fun interface ContinueChatWithAgentUseCase {
+interface ContinueChatWithAgentUseCase {
     suspend operator fun invoke(command: ContinueChatWithAgentCommand): Either<ContinueChatWithAgentError, ContinueChatWithAgentResult>
+    suspend fun stream(
+        command: ContinueChatWithAgentCommand,
+        onToken: suspend (String) -> Unit
+    ): Either<ContinueChatWithAgentError, ContinueChatWithAgentResult>
 }
 
 data class ContinueChatWithAgentCommand(

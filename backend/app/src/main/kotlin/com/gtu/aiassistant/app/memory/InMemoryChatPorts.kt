@@ -52,11 +52,29 @@ class InMemoryDeleteChatPort(
 class InMemoryGenerateMessagePort : GenerateMessagePort {
     override suspend fun invoke(messages: List<Message>): Either<InfrastructureError, Message> {
         val lastMessage = messages.last()
-
         return Either.Right(
             Message(
                 id = UUID.randomUUID(),
                 originalText = "AI response to: ${lastMessage.originalText}",
+                senderType = MessageSenderType.AI,
+                createdAt = maxOf(Instant.now(), lastMessage.createdAt.plusMillis(1))
+            )
+        )
+    }
+
+    override suspend fun stream(
+        messages: List<Message>,
+        onToken: suspend (String) -> Unit
+    ): Either<InfrastructureError, Message> {
+        val lastMessage = messages.last()
+        val text = "AI response to: ${lastMessage.originalText}"
+        for (word in text.split(" ")) {
+            onToken("$word ")
+        }
+        return Either.Right(
+            Message(
+                id = UUID.randomUUID(),
+                originalText = text,
                 senderType = MessageSenderType.AI,
                 createdAt = maxOf(Instant.now(), lastMessage.createdAt.plusMillis(1))
             )

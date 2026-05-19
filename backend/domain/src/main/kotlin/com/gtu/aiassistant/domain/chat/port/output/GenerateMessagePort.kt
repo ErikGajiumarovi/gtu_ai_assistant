@@ -8,8 +8,9 @@ import com.gtu.aiassistant.domain.chat.model.MessageSenderType
 import com.gtu.aiassistant.domain.model.DomainError
 import com.gtu.aiassistant.domain.model.InfrastructureError
 
-fun interface GenerateMessagePort {
+interface GenerateMessagePort {
     suspend operator fun invoke(messages: List<Message>): Either<InfrastructureError, Message>
+    suspend fun stream(messages: List<Message>, onToken: suspend (String) -> Unit): Either<InfrastructureError, Message>
 }
 
 fun List<Message>.validateForMessageGeneration(): Either<DomainError, List<Message>> =

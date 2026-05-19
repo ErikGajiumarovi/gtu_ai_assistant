@@ -4,6 +4,7 @@ import com.auth0.jwt.JWT
 import com.auth0.jwt.algorithms.Algorithm
 import com.gtu.aiassistant.domain.user.model.UserEmail
 import com.gtu.aiassistant.domain.user.model.UserId
+import com.gtu.aiassistant.shared.ApiErrorResponse
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application

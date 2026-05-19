@@ -35,25 +35,54 @@ class CreateChatWithAgentUseCaseImpl(
                 .mapLeft(CreateChatWithAgentError::MessageGenerationFailed)
                 .bind()
 
-            val chat = Chat
-                .create(
-                    id = chatId,
-                    version = 0L,
-                    messages = listOf(command.message, generatedMessage),
-                    createdAt = command.message.createdAt,
-                    updatedAt = generatedMessage.createdAt,
-                    ownedBy = command.userId
-                )
+            buildChat(chatId, command, generatedMessage).bind()
+        }
+
+    override suspend fun stream(
+        command: com.gtu.aiassistant.domain.chat.port.input.CreateChatWithAgentCommand,
+        onToken: suspend (String) -> Unit
+    ): Either<CreateChatWithAgentError, CreateChatWithAgentResult> =
+        either {
+            val chatId = ChatId
+                .create(UUID.randomUUID())
                 .mapLeft(CreateChatWithAgentError::InvalidDomainState)
                 .bind()
 
-            val persistedChat = saveChatPort
-                .invoke(chat)
-                .mapLeft(CreateChatWithAgentError::PersistenceFailed)
+            val historyForGeneration = listOf(command.message)
+                .validateForMessageGeneration()
+                .mapLeft(CreateChatWithAgentError::InvalidDomainState)
                 .bind()
 
-            CreateChatWithAgentResult(
-                chat = persistedChat
-            )
+            val generatedMessage = generateMessagePort
+                .stream(historyForGeneration, onToken)
+                .mapLeft(CreateChatWithAgentError::MessageGenerationFailed)
+                .bind()
+
+            buildChat(chatId, command, generatedMessage).bind()
         }
+
+    private suspend fun buildChat(
+        chatId: ChatId,
+        command: com.gtu.aiassistant.domain.chat.port.input.CreateChatWithAgentCommand,
+        generatedMessage: com.gtu.aiassistant.domain.chat.model.Message
+    ): Either<CreateChatWithAgentError, CreateChatWithAgentResult> = either {
+        val chat = Chat
+            .create(
+                id = chatId,
+                version = 0L,
+                messages = listOf(command.message, generatedMessage),
+                createdAt = command.message.createdAt,
+                updatedAt = generatedMessage.createdAt,
+                ownedBy = command.userId
+            )
+            .mapLeft(CreateChatWithAgentError::InvalidDomainState)
+            .bind()
+
+        val persistedChat = saveChatPort
+            .invoke(chat)
+            .mapLeft(CreateChatWithAgentError::PersistenceFailed)
+            .bind()
+
+        CreateChatWithAgentResult(chat = persistedChat)
+    }
 }

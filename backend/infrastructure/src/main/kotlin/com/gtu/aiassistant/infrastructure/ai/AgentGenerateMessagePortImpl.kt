@@ -22,8 +22,17 @@ import com.gtu.aiassistant.infrastructure.ai.tools.GtuKnowledgeSearchTool
 import com.gtu.aiassistant.infrastructure.ai.tools.GtuWebSearchTool
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
+import io.ktor.client.request.header
+import io.ktor.client.request.preparePost
+import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsChannel
+import io.ktor.http.ContentType
+import io.ktor.http.contentType
+
+import io.ktor.utils.io.readUTF8Line
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.*
 import java.time.Instant
 import java.util.UUID
 
@@ -31,80 +40,170 @@ class AgentGenerateMessagePortImpl private constructor(
     private val executor: SingleLLMPromptExecutor,
     private val model: LLModel,
     private val knowledgeSearchTool: GtuKnowledgeSearchTool,
-    private val webSearchTool: GtuWebSearchTool
+    private val webSearchTool: GtuWebSearchTool,
+    private val config: AiConfig,
+    private val httpClient: HttpClient
 ) : GenerateMessagePort {
     override suspend fun invoke(messages: List<DomainMessage>): Either<InfrastructureError, DomainMessage> =
         withContext(Dispatchers.IO) {
             either {
-                val validMessages = messages
-                    .validateForMessageGeneration()
-                    .mapLeft { cause ->
-                        InfrastructureError(
-                            cause = IllegalArgumentException("Invalid message history for AI generation: $cause")
-                        )
-                    }
-                    .bind()
-
-                val latestUserText = validMessages.last().originalText
-                val ragSources = knowledgeSearchTool.search(latestUserText)
-                    .fold(
-                        ifLeft = { emptyList() },
-                        ifRight = { it }
-                    )
-                val shouldSearchWeb = ragSources.maxOfOrNull { it.score } == null ||
-                    ragSources.maxOfOrNull { it.score }!! < MIN_RAG_CONFIDENCE ||
-                    latestUserText.isTimeSensitive()
-                val webSources = if (shouldSearchWeb) {
-                    webSearchTool.search(latestUserText)
-                        .fold(
-                            ifLeft = { emptyList() },
-                            ifRight = { it }
-                        )
-                } else {
-                    emptyList()
-                }
-                val sources = (ragSources + webSources)
-                    .distinctBy { it.url to it.snippet }
-                    .take(MAX_SOURCES)
-
-                val llmPrompt = prompt("generate-gtu-agent-message") {
-                    system(SYSTEM_PROMPT + "\n\n" + sources.toContextBlock())
-
-                    validMessages
-                        .takeLast(MAX_HISTORY_MESSAGES)
-                        .forEach { message ->
-                            when (message.senderType) {
-                                MessageSenderType.USER -> user(message.originalText)
-                                MessageSenderType.AI -> assistant(message.originalText)
-                            }
-                        }
-                }
-
-                val rawResponse = Either.catch {
-                    executor.execute(llmPrompt, model)
-                }.mapLeft(::InfrastructureError).bind()
-
-                val generatedText = Either.catch {
-                    rawResponse.assistantText()
-                }.mapLeft(::InfrastructureError).bind().trim()
-
-                ensure(generatedText.isNotBlank()) {
-                    InfrastructureError(
-                        cause = IllegalStateException("LLM response is blank")
-                    )
-                }
-
-                val lastMessageCreatedAt = validMessages.last().createdAt
-
-                DomainMessage(
-                    id = UUID.randomUUID(),
-                    originalText = generatedText,
-                    senderType = MessageSenderType.AI,
-                    createdAt = maxOf(Instant.now(), lastMessageCreatedAt.plusMillis(1)),
-                    citations = sources.toCitations()
-                )
+                val (validMessages, sources) = prepareGeneration(messages).bind()
+                val generatedText = executeLlm(validMessages, sources).bind()
+                buildDomainMessage(validMessages, sources, generatedText)
             }
         }
+
+    override suspend fun stream(
+        messages: List<DomainMessage>,
+        onToken: suspend (String) -> Unit
+    ): Either<InfrastructureError, DomainMessage> =
+        withContext(Dispatchers.IO) {
+            either {
+                val (validMessages, sources) = prepareGeneration(messages).bind()
+                val generatedText = executeLlmStream(validMessages, sources, onToken).bind()
+                buildDomainMessage(validMessages, sources, generatedText)
+            }
+        }
+
+    private suspend fun prepareGeneration(
+        messages: List<DomainMessage>
+    ): Either<InfrastructureError, Pair<List<DomainMessage>, List<AgentSource>>> = either {
+        val validMessages = messages
+            .validateForMessageGeneration()
+            .mapLeft { cause ->
+                InfrastructureError(cause = IllegalArgumentException("Invalid message history for AI generation: $cause"))
+            }
+            .bind()
+
+        val latestUserText = validMessages.last().originalText
+        val ragSources = knowledgeSearchTool.search(latestUserText)
+            .fold(ifLeft = { emptyList() }, ifRight = { it })
+        val shouldSearchWeb = ragSources.maxOfOrNull { it.score } == null ||
+            ragSources.maxOfOrNull { it.score }!! < MIN_RAG_CONFIDENCE ||
+            latestUserText.isTimeSensitive()
+        val webSources = if (shouldSearchWeb) {
+            webSearchTool.search(latestUserText)
+                .fold(ifLeft = { emptyList() }, ifRight = { it })
+        } else {
+            emptyList()
+        }
+        val sources = (ragSources + webSources)
+            .distinctBy { it.url to it.snippet }
+            .take(MAX_SOURCES)
+
+        validMessages to sources
+    }
+
+    private suspend fun executeLlm(
+        validMessages: List<DomainMessage>,
+        sources: List<AgentSource>
+    ): Either<InfrastructureError, String> = either {
+        val llmPrompt = prompt("generate-gtu-agent-message") {
+            system(SYSTEM_PROMPT + "\n\n" + sources.toContextBlock())
+            validMessages.takeLast(MAX_HISTORY_MESSAGES).forEach { message ->
+                when (message.senderType) {
+                    MessageSenderType.USER -> user(message.originalText)
+                    MessageSenderType.AI -> assistant(message.originalText)
+                }
+            }
+        }
+
+        val rawResponse = Either.catch {
+            executor.execute(llmPrompt, model)
+        }.mapLeft(::InfrastructureError).bind()
+
+        val generatedText = Either.catch {
+            rawResponse.assistantText()
+        }.mapLeft(::InfrastructureError).bind().trim()
+
+        ensure(generatedText.isNotBlank()) {
+            InfrastructureError(cause = IllegalStateException("LLM response is blank"))
+        }
+        generatedText
+    }
+
+    private suspend fun executeLlmStream(
+        validMessages: List<DomainMessage>,
+        sources: List<AgentSource>,
+        onToken: suspend (String) -> Unit
+    ): Either<InfrastructureError, String> = either {
+        val systemContent = SYSTEM_PROMPT + "\n\n" + sources.toContextBlock()
+        val messagesJson = buildJsonArray {
+            addJsonObject {
+                put("role", "system")
+                put("content", systemContent)
+            }
+            validMessages.takeLast(MAX_HISTORY_MESSAGES).forEach { message ->
+                addJsonObject {
+                    put("role", when (message.senderType) {
+                        MessageSenderType.USER -> "user"
+                        MessageSenderType.AI -> "assistant"
+                    })
+                    put("content", message.originalText)
+                }
+            }
+        }
+
+        val requestBody = buildJsonObject {
+            put("model", model.id)
+            put("stream", true)
+            put("messages", messagesJson)
+        }
+
+        val textBuilder = StringBuilder()
+
+        httpClient.preparePost("${config.baseUrl}/chat/completions") {
+            contentType(ContentType.Application.Json)
+            header("Authorization", "Bearer ${config.apiKey}")
+            setBody(requestBody.toString())
+        }.execute { response ->
+            val channel = response.bodyAsChannel()
+            while (!channel.isClosedForRead) {
+                val line = channel.readUTF8Line() ?: break
+                if (line.startsWith("data: ")) {
+                    val data = line.removePrefix("data: ").trim()
+                    if (data == "[DONE]") break
+                    try {
+                        val json = Json.parseToJsonElement(data).jsonObject
+                        val content = json["choices"]
+                            ?.jsonArray
+                            ?.firstOrNull()
+                            ?.jsonObject
+                            ?.get("delta")
+                            ?.jsonObject
+                            ?.get("content")
+                            ?.jsonPrimitive
+                            ?.content ?: ""
+                        if (content.isNotEmpty()) {
+                            onToken(content)
+                            textBuilder.append(content)
+                        }
+                    } catch (_: Exception) { }
+                }
+            }
+        }
+
+        val fullText = textBuilder.toString().trim()
+        ensure(fullText.isNotBlank()) {
+            InfrastructureError(cause = IllegalStateException("LLM stream produced empty response"))
+        }
+        fullText
+    }
+
+    private fun buildDomainMessage(
+        validMessages: List<DomainMessage>,
+        sources: List<AgentSource>,
+        generatedText: String
+    ): DomainMessage {
+        val lastMessageCreatedAt = validMessages.last().createdAt
+        return DomainMessage(
+            id = UUID.randomUUID(),
+            originalText = generatedText,
+            senderType = MessageSenderType.AI,
+            createdAt = maxOf(Instant.now(), lastMessageCreatedAt.plusMillis(1)),
+            citations = sources.toCitations()
+        )
+    }
 
     companion object {
         fun create(
@@ -112,14 +211,15 @@ class AgentGenerateMessagePortImpl private constructor(
             knowledgeSearchTool: GtuKnowledgeSearchTool,
             webSearchTool: GtuWebSearchTool
         ): AgentGenerateMessagePortImpl {
-            val client = OpenAILLMClient(
+            val client = HttpClient(CIO)
+            val openaiClient = OpenAILLMClient(
                 apiKey = config.apiKey,
                 settings = OpenAIClientSettings(baseUrl = config.baseUrl),
-                baseClient = HttpClient(CIO)
+                baseClient = client
             )
 
             return AgentGenerateMessagePortImpl(
-                executor = SingleLLMPromptExecutor(client),
+                executor = SingleLLMPromptExecutor(openaiClient),
                 model = LLModel(
                     provider = LLMProvider.OpenAI,
                     id = config.model,
@@ -130,7 +230,9 @@ class AgentGenerateMessagePortImpl private constructor(
                     contextLength = DEFAULT_CONTEXT_LENGTH
                 ),
                 knowledgeSearchTool = knowledgeSearchTool,
-                webSearchTool = webSearchTool
+                webSearchTool = webSearchTool,
+                config = config,
+                httpClient = client
             )
         }
 
@@ -138,6 +240,7 @@ class AgentGenerateMessagePortImpl private constructor(
         private const val DEFAULT_CONTEXT_LENGTH: Long = 128_000L
         private const val MAX_SOURCES: Int = 6
         private const val MIN_RAG_CONFIDENCE: Double = 0.32
+        private const val STREAM_CHUNK_SIZE: Long = 4096L
 
         private const val SYSTEM_PROMPT: String =
             """
@@ -188,19 +291,9 @@ private fun List<AgentSource>.toCitations(): List<MessageCitation> =
 private fun String.isTimeSensitive(): Boolean {
     val normalized = lowercase()
     return listOf(
-        "today",
-        "latest",
-        "current",
-        "deadline",
-        "news",
-        "now",
-        "сегодня",
-        "сейчас",
-        "последн",
-        "дедлайн",
-        "новост",
-        "დღეს",
-        "ახლა"
+        "today", "latest", "current", "deadline", "news", "now",
+        "сегодня", "сейчас", "последн", "дедлайн", "новост",
+        "დღეს", "ახლა"
     ).any { it in normalized }
 }
 

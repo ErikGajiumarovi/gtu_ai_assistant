@@ -7,8 +7,12 @@ import com.gtu.aiassistant.domain.model.DomainError
 import com.gtu.aiassistant.domain.model.InfrastructureError
 import com.gtu.aiassistant.domain.user.model.UserId
 
-fun interface CreateChatWithAgentUseCase {
+interface CreateChatWithAgentUseCase {
     suspend operator fun invoke(command: CreateChatWithAgentCommand): Either<CreateChatWithAgentError, CreateChatWithAgentResult>
+    suspend fun stream(
+        command: CreateChatWithAgentCommand,
+        onToken: suspend (String) -> Unit
+    ): Either<CreateChatWithAgentError, CreateChatWithAgentResult>
 }
 
 data class CreateChatWithAgentCommand(
