@@ -5,6 +5,8 @@ WORKDIR /workspace
 COPY settings.gradle.kts build.gradle.kts gradle.properties ./
 COPY gradle ./gradle
 COPY backend ./backend
+COPY shared ./shared
+COPY frontend ./frontend
 
 RUN gradle :backend:app:installDist --no-daemon
 

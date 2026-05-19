@@ -12,10 +12,14 @@ import org.jetbrains.compose.web.css.*
 import org.jetbrains.compose.web.dom.*
 import org.jetbrains.compose.web.renderComposable
 import org.w3c.dom.HTMLElement
+import org.w3c.dom.HTMLInputElement
 import org.w3c.dom.HTMLTextAreaElement
 
 private const val SESSION_KEY = "gtu-ai-assistant.session"
 private val sessionJson = Json { ignoreUnknownKeys = true }
+private val NoOpDisposableEffect = object : androidx.compose.runtime.DisposableEffectResult {
+    override fun dispose() {}
+}
 
 @Serializable
 private data class SessionState(val email: String, val jwt: String)
@@ -109,7 +113,7 @@ fun App() {
                 } }
             )
         } else {
-            Div(attrs = { style { display(DisplayMode.Grid); property("grid-template-columns", "260px 1fr"); property("height", "100vh") } }) {
+            Div(attrs = { style { display(DisplayStyle.Grid); property("grid-template-columns", "260px 1fr"); property("height", "100vh") } }) {
                 Sidebar(
                     chats = filteredChats, selectedChatId = selectedChatId, session = session!!,
                     isRefreshingChats = isRefreshingChats, isStreaming = isStreaming,
@@ -173,19 +177,19 @@ private fun AuthPage(
     onLoginDraftChange: (LoginDraft) -> Unit, onRegistrationDraftChange: (RegistrationDraft) -> Unit,
     onLogin: () -> Unit, onRegister: () -> Unit
 ) {
-    Div(attrs = { style { display(DisplayMode.Flex); alignItems(AlignItems.Center); justifyContent(JustifyContent.Center); property("min-height", "100vh"); backgroundColor(Color("#f7f7f8")); padding(16.px) } }) {
+    Div(attrs = { style { display(DisplayStyle.Flex); alignItems(AlignItems.Center); justifyContent(JustifyContent.Center); property("min-height", "100vh"); backgroundColor(Color("#f7f7f8")); padding(16.px) } }) {
         Div(attrs = { style { property("width", "100%"); property("max-width", "400px") } }) {
-            Div(attrs = { style { textAlign(TextAlign.Center); property("margin-bottom", "32px") } }) {
+            Div(attrs = { style { textAlign("center"); property("margin-bottom", "32px") } }) {
                 Span(attrs = { style { fontSize(32.px); fontWeight("700"); color(Color("#1a1a2e")) } }) { Text("GTU Assistant") }
                 P(attrs = { style { fontSize(14.px); color(Color("#666")); marginTop(8.px) } }) { Text("Sign in to your account") }
             }
             Div(attrs = { style { backgroundColor(Color("white")); border(1.px, LineStyle.Solid, Color("#e5e5e5")); property("border-radius", "12px"); padding(24.px) } }) {
-                Div(attrs = { style { display(DisplayMode.Flex); marginBottom(24.px) } }) {
+                Div(attrs = { style { display(DisplayStyle.Flex); marginBottom(24.px) } }) {
                     listOf("login" to "Sign In", "register" to "Sign Up").forEach { (mode, label) ->
                         Button(attrs = {
                             onClick { onSetAuthMode(mode) }
                             style {
-                                flex(1.0); padding(10.px); fontSize(14.px); fontWeight("600")
+                                flex(1); padding(10.px); fontSize(14.px); fontWeight("600")
                                 property("border-radius", "8px"); border(0.px)
                                 backgroundColor(if (authMode == mode) Color("#1a1a2e") else Color("transparent"))
                                 color(if (authMode == mode) Color("white") else Color("#666"))
@@ -202,7 +206,7 @@ private fun AuthPage(
                         Field("Password", "password", loginDraft.password) { onLoginDraftChange(loginDraft.copy(password = it)) }
                         Spacer(24)
                         Button(attrs = {
-                            disabled(isLoggingIn); attr("type", "submit")
+                            if (isLoggingIn) disabled(); attr("type", "submit")
                             style {
                                 property("width", "100%"); padding(12.px); fontSize(14.px); fontWeight("600")
                                 property("border-radius", "8px"); border(0.px)
@@ -223,7 +227,7 @@ private fun AuthPage(
                         Field("Password", "password", registrationDraft.password) { onRegistrationDraftChange(registrationDraft.copy(password = it)) }
                         Spacer(24)
                         Button(attrs = {
-                            disabled(isRegistering); attr("type", "submit")
+                            if (isRegistering) disabled(); attr("type", "submit")
                             style {
                                 property("width", "100%"); padding(12.px); fontSize(14.px); fontWeight("600")
                                 property("border-radius", "8px"); border(0.px)
@@ -253,9 +257,9 @@ private fun ChatScreen(
         scrollRef.value?.scrollIntoView(false)
     }
 
-    Div(attrs = { style { display(DisplayMode.Flex); flexDirection(FlexDirection.Column); property("height", "100vh") } }) {
+    Div(attrs = { style { display(DisplayStyle.Flex); flexDirection(FlexDirection.Column); property("height", "100vh") } }) {
         Div(attrs = { style { flexGrow(1.0); property("overflow-y", "auto"); padding(0.px) } }) {
-            Div(attrs = { style { property("max-width", "768px"); margin("0 auto"); padding(32.px, 24.px) } }) {
+            Div(attrs = { style { property("max-width", "768px"); property("margin", "0 auto"); property("padding", "32px 24px") } }) {
                 if (notice != null && notice.tone != "info") {
                     NoticeBanner(notice = notice)
                     Spacer(16)
@@ -265,7 +269,7 @@ private fun ChatScreen(
                 val hasAnyContent = existingMessages.isNotEmpty() || pendingUserText.isNotEmpty() || isStreaming
 
                 if (!hasAnyContent) {
-                    Div(attrs = { style { textAlign(TextAlign.Center); paddingTop(120.px) } }) {
+                    Div(attrs = { style { textAlign("center"); paddingTop(120.px) } }) {
                         Span(attrs = { style { fontSize(48.px); color(Color("#e0e0e0")) } }) { Text("\uD83C\uDF93") }
                         P(attrs = { style { fontSize(18.px); fontWeight("600"); color(Color("#333")); marginTop(16.px) } }) { Text("How can I help you?") }
                         P(attrs = { style { fontSize(14.px); color(Color("#888")); marginTop(8.px) } }) { Text("Ask me anything about Georgian Technical University") }
@@ -293,13 +297,13 @@ private fun ChatScreen(
                     Spacer(12)
                 }
 
-                Div(attrs = { ref { scrollRef.value = it }; style { height(1.px) } })
+                Div(attrs = { ref { el -> scrollRef.value = el; NoOpDisposableEffect }; style { height(1.px) } })
             }
         }
 
-        Div(attrs = { style { borderTop(1.px, LineStyle.Solid, Color("#e5e5e5")); padding(16.px, 24.px); backgroundColor(Color("white")) } }) {
-            Form(attrs = { onSubmit { it.preventDefault(); onSubmit(composerText); composerText = "" }; style { property("max-width", "768px"); margin("0 auto") } }) {
-                Div(attrs = { style { display(DisplayMode.Flex); property("gap", "8px"); alignItems(AlignItems.FlexEnd) } }) {
+        Div(attrs = { style { property("border-top", "1px solid #e5e5e5"); property("padding", "16px 24px"); backgroundColor(Color("white")) } }) {
+            Form(attrs = { onSubmit { it.preventDefault(); onSubmit(composerText); composerText = "" }; style { property("max-width", "768px"); property("margin", "0 auto") } }) {
+                Div(attrs = { style { display(DisplayStyle.Flex); gap(8.px); alignItems(AlignItems.FlexEnd) } }) {
                     val textareaRef = remember { mutableStateOf<HTMLTextAreaElement?>(null) }
                     LaunchedEffect(composerText) {
                         textareaRef.value?.let { ta ->
@@ -309,14 +313,14 @@ private fun ChatScreen(
                         }
                     }
                     TextArea(attrs = {
-                        ref { textareaRef.value = it }
+                        ref { textareaRef.value = it; NoOpDisposableEffect }
                         value(composerText)
                         rows(1)
-                        disabled(isStreaming)
+                            if (isStreaming) disabled()
                         placeholder("Message GTU Assistant...")
                         onInput { event -> composerText = (event.target as HTMLTextAreaElement).value }
                         style {
-                            flex(1.0); property("resize", "none"); padding(12.px, 16.px)
+                            flex(1); property("resize", "none"); padding(12.px, 16.px)
                             property("border-radius", "12px"); border(1.px, LineStyle.Solid, Color("#e5e5e5"))
                             fontSize(14.px); property("outline", "none"); backgroundColor(Color("#fafafa"))
                             property("max-height", "200px"); property("line-height", "1.5")
@@ -324,14 +328,14 @@ private fun ChatScreen(
                         }
                     })
                     Button(attrs = {
-                        disabled(isStreaming || composerText.trim().isEmpty())
+                        if (isStreaming || composerText.trim().isEmpty()) disabled()
                         attr("type", "submit")
                         style {
                             width(40.px); height(40.px); padding(0.px)
                             property("border-radius", "10px"); border(0.px)
                             backgroundColor(if (composerText.trim().isNotEmpty() && !isStreaming) Color("#1a1a2e") else Color("#e5e5e5"))
                             color(Color("white")); cursor(if (isStreaming || composerText.trim().isEmpty()) "not-allowed" else "pointer")
-                            display(DisplayMode.Flex); alignItems(AlignItems.Center); justifyContent(JustifyContent.Center)
+                            display(DisplayStyle.Flex); alignItems(AlignItems.Center); justifyContent(JustifyContent.Center)
                             property("flex-shrink", "0")
                         }
                     }) { Span(attrs = { style { fontSize(18.px) } }) { Text("\u2191") } }
@@ -347,7 +351,7 @@ private fun MessageBubble(
     citations: List<CitationResponse> = emptyList(),
     isStreaming: Boolean = false
 ) {
-    Div(attrs = { style { display(DisplayMode.Flex); justifyContent(if (isUser) JustifyContent.End else JustifyContent.Start) } }) {
+    Div(attrs = { style { display(DisplayStyle.Flex); justifyContent(if (isUser) JustifyContent.End else JustifyContent.Start) } }) {
         Div(attrs = { style { property("max-width", "85%") } }) {
             Div(attrs = {
                 style {
@@ -370,10 +374,10 @@ private fun MessageBubble(
                 }
             }
             if (!isUser && citations.isNotEmpty()) {
-                Div(attrs = { style { display(DisplayMode.Flex); property("flex-wrap", "wrap"); property("gap", "6px"); marginTop(8.px) } }) {
+                Div(attrs = { style { display(DisplayStyle.Flex); property("flex-wrap", "wrap"); property("gap", "6px"); marginTop(8.px) } }) {
                     for (citation in citations) {
                         A(href = citation.url, attrs = {
-                            target("_blank"); rel("noreferrer noopener")
+                            attr("target", "_blank"); attr("rel", "noreferrer noopener")
                             title(citation.snippet.ifEmpty { citation.title })
                             style {
                                 fontSize(12.px); color(Color("#666")); textDecoration("none")
@@ -388,7 +392,7 @@ private fun MessageBubble(
                 }
             }
             if (time.isNotEmpty()) {
-                Span(attrs = { style { fontSize(11.px); color(Color("#999")); marginTop(4.px); display(DisplayMode.Block) } }) { Text(time) }
+                Span(attrs = { style { fontSize(11.px); color(Color("#999")); marginTop(4.px); display(DisplayStyle.Block) } }) { Text(time) }
             }
         }
     }
@@ -401,8 +405,8 @@ private fun Sidebar(
     onSelectChat: (String) -> Unit, onNewChat: () -> Unit, onLogout: () -> Unit,
     onSearchChange: (String) -> Unit, onRefresh: () -> Unit
 ) {
-    Aside(attrs = { style { backgroundColor(Color("#171717")); color(Color("white")); display(DisplayMode.Flex); flexDirection(FlexDirection.Column); property("height", "100vh") } }) {
-        Div(attrs = { style { padding(16.px); flexGrow(1.0); display(DisplayMode.Flex); flexDirection(FlexDirection.Column) } }) {
+    Aside(attrs = { style { backgroundColor(Color("#171717")); color(Color("white")); display(DisplayStyle.Flex); flexDirection(FlexDirection.Column); property("height", "100vh") } }) {
+        Div(attrs = { style { padding(16.px); flexGrow(1.0); display(DisplayStyle.Flex); flexDirection(FlexDirection.Column) } }) {
             Button(attrs = {
                 onClick { onNewChat() }
                 style {
@@ -413,7 +417,7 @@ private fun Sidebar(
                 }
             }) { Text("+ New chat") }
 
-            Div(attrs = { style { display(DisplayMode.Flex); flexDirection(FlexDirection.Column); flexGrow(1.0); property("overflow-y", "auto") } }) {
+            Div(attrs = { style { display(DisplayStyle.Flex); flexDirection(FlexDirection.Column); flexGrow(1.0); property("overflow-y", "auto") } }) {
                 if (chats.isEmpty()) {
                     P(attrs = { style { fontSize(13.px); color(Color("rgba(255,255,255,0.4)")); padding(8.px) } }) { Text("No conversations yet") }
                 } else {
@@ -421,9 +425,9 @@ private fun Sidebar(
                         val selected = chat.id == selectedChatId
                         Button(attrs = {
                             onClick { onSelectChat(chat.id) }
-                            disabled(isStreaming)
+                        if (isStreaming) disabled()
                             style {
-                                display(DisplayMode.Block); property("width", "100%"); textAlign(TextAlign.Left); cursor(if (isStreaming) "not-allowed" else "pointer")
+                                display(DisplayStyle.Block); property("width", "100%"); textAlign("left"); cursor(if (isStreaming) "not-allowed" else "pointer")
                                 padding(10.px, 12.px); fontSize(14.px); property("border-radius", "8px"); border(0.px)
                                 backgroundColor(if (selected) Color("rgba(255,255,255,0.1)") else Color("transparent"))
                                 color(if (selected) Color("white") else Color("rgba(255,255,255,0.7)"))
@@ -437,9 +441,9 @@ private fun Sidebar(
                 }
             }
 
-            Div(attrs = { style { borderTop(1.px, LineStyle.Solid, Color("rgba(255,255,255,0.1)")); paddingTop(12.px) } }) {
-                Div(attrs = { style { display(DisplayMode.Flex); alignItems(AlignItems.Center); gap(10.px); marginBottom(12.px) } }) {
-                    Div(attrs = { style { width(32.px); height(32.px); property("border-radius", "6px"); backgroundColor(Color("#333")); display(DisplayMode.Flex); alignItems(AlignItems.Center); justifyContent(JustifyContent.Center); fontSize(14.px); fontWeight("600") } }) { Text(session.email.take(2).uppercase()) }
+            Div(attrs = { style { property("border-top", "1px solid rgba(255,255,255,0.1)"); paddingTop(12.px) } }) {
+                Div(attrs = { style { display(DisplayStyle.Flex); alignItems(AlignItems.Center); gap(10.px); marginBottom(12.px) } }) {
+                    Div(attrs = { style { width(32.px); height(32.px); property("border-radius", "6px"); backgroundColor(Color("#333")); display(DisplayStyle.Flex); alignItems(AlignItems.Center); justifyContent(JustifyContent.Center); fontSize(14.px); fontWeight("600") } }) { Text(session.email.take(2).uppercase()) }
                     Span(attrs = { style { fontSize(13.px); color(Color("rgba(255,255,255,0.7)")) } }) { Text(session.email) }
                 }
                 Button(attrs = {
@@ -454,7 +458,7 @@ private fun Sidebar(
 @Composable
 private fun Field(label: String, type: String, value: String, onChange: (String) -> Unit) {
     Div(attrs = { style { marginBottom(0.px) } }) {
-        Span(attrs = { style { display(DisplayMode.Block); fontSize(12.px); fontWeight("600"); color(Color("#555")); marginBottom(6.px) } }) { Text(label) }
+        Span(attrs = { style { display(DisplayStyle.Block); fontSize(12.px); fontWeight("600"); color(Color("#555")); marginBottom(6.px) } }) { Text(label) }
         Input(type = if (type == "password") InputType.Password else InputType.Text, attrs = {
             if (type == "email") attr("type", "email")
             value(value)

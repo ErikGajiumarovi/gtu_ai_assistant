@@ -2,7 +2,6 @@
 .gradle
 .idea
 .kotlin
-frontend
 node_modules
 **/build
 gradle-dist

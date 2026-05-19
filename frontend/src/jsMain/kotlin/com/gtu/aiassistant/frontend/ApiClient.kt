@@ -213,7 +213,7 @@ class ApiClient(private val baseUrl: String = "") {
             }
             val doneData = obj["d"]
             if (doneData != null) {
-                val chat = json.decodeFromJsonElement(doneData)
+                val chat = json.decodeFromString<ChatResponse>(doneData.toString())
                 onDone(chat)
                 return
             }
