@@ -72,6 +72,10 @@ class GtuWebSearchTool(
 
         val matches = queryTerms.count { it in urlText }
         val priority = when {
+            "/library/" in canonicalUrl || "opac." in canonicalUrl -> 2.8
+            "/el-books/" in canonicalUrl || "/digital-library" in canonicalUrl -> 2.6
+            "/acad-personal.php" in canonicalUrl || "/academic-personal.php" in canonicalUrl -> 2.5
+            "/faculty-council.php" in canonicalUrl -> 2.4
             "/students/" in canonicalUrl || "/en/students/" in canonicalUrl -> 2.0
             "/apply/" in canonicalUrl || "/en/apply/" in canonicalUrl -> 1.8
             "/faculties/" in canonicalUrl || "/structure/faculties" in canonicalUrl -> 1.6

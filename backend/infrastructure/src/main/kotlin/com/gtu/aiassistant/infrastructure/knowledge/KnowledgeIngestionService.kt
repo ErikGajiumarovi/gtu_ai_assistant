@@ -35,7 +35,7 @@ class KnowledgeIngestionService(
                 ifLeft = { RobotsRules.allowAll() },
                 ifRight = { it }
             )
-            val entries = fetcher.fetchSitemap().bind()
+            val sitemapEntries = fetcher.fetchSitemap().bind()
                 .asSequence()
                 .mapNotNull { entry ->
                     val canonical = urlPolicy.canonicalize(entry.url) ?: return@mapNotNull null
@@ -43,6 +43,18 @@ class KnowledgeIngestionService(
                     entry.copy(url = canonical)
                 }
                 .distinctBy { it.url }
+                .toList()
+
+            val priorityEntries = GtuLibraryKnowledgeSource.ALL_PRIORITY_URLS
+                .mapNotNull { url ->
+                    val canonical = urlPolicy.canonicalize(url) ?: return@mapNotNull null
+                    if (!robots.isAllowed(canonical)) return@mapNotNull null
+                    SitemapEntry(url = canonical, lastModifiedAt = null)
+                }
+                .distinctBy { it.url }
+                .filter { priority -> sitemapEntries.none { it.url == priority.url } }
+
+            val entries = (sitemapEntries + priorityEntries)
                 .sortedWith(compareByDescending<SitemapEntry> { it.url.priorityScore() }.thenBy { it.url })
                 .take(config.maxPagesPerRun)
                 .toList()
@@ -187,8 +199,16 @@ internal fun String.priorityScore(): Int {
     val isFacultyScoped = firstSegment.isNotBlank() && firstSegment !in ROOT_SITE_SEGMENTS
 
     val base = when {
-        "/en/students/edu/calendar.php" in url || "/students/edu/calendar.php" in url -> 280
-        "/en/students/learning/calendar.php" in url || "/students/learning/calendar.php" in url -> 260
+        "/en/library/" in url || "/library/" in url -> 300
+        "/el-books/" in url -> 290
+        "/digital-library" in url -> 285
+        "/databases.php" in url -> 280
+        "/opac." in url -> 275
+        "/acad-personal.php" in url || "/academic-personal.php" in url -> 270
+        "/faculty-council.php" in url -> 260
+        "/my.gtu.ge/en/faculties" in url -> 255
+        "/en/students/edu/calendar.php" in url || "/students/edu/calendar.php" in url -> 250
+        "/en/students/learning/calendar.php" in url || "/students/learning/calendar.php" in url -> 240
         "/en/students/edu/" in url || "/students/edu/" in url -> 220
         "/en/students/" in url || "/students/" in url -> 170
         "/en/apply/" in url || "/apply/" in url -> 150

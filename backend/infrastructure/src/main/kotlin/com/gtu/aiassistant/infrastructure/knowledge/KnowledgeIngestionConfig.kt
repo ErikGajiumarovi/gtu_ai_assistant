@@ -27,7 +27,8 @@ data class KnowledgeIngestionConfig(
             "elearning.gtu.ge",
             "testing.gtu.ge",
             "vici.gtu.ge",
-            "syllabus.gtu.ge"
+            "syllabus.gtu.ge",
+            "opac.gtu.ge"
         )
     }
 }
