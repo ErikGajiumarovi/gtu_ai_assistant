@@ -6,6 +6,7 @@ import com.gtu.aiassistant.domain.chat.model.Message
 import com.gtu.aiassistant.domain.chat.model.MessageSenderType
 import com.gtu.aiassistant.domain.chat.port.output.DeleteChatPort
 import com.gtu.aiassistant.domain.chat.port.output.FindChatPort
+import com.gtu.aiassistant.domain.chat.port.output.GenerateMessageCommand
 import com.gtu.aiassistant.domain.chat.port.output.GenerateMessagePort
 import com.gtu.aiassistant.domain.chat.port.output.SaveChatPort
 import com.gtu.aiassistant.domain.model.InfrastructureError
@@ -50,8 +51,8 @@ class InMemoryDeleteChatPort(
 }
 
 class InMemoryGenerateMessagePort : GenerateMessagePort {
-    override suspend fun invoke(messages: List<Message>): Either<InfrastructureError, Message> {
-        val lastMessage = messages.last()
+    override suspend fun invoke(command: GenerateMessageCommand): Either<InfrastructureError, Message> {
+        val lastMessage = command.messages.last()
         return Either.Right(
             Message(
                 id = UUID.randomUUID(),
@@ -63,10 +64,10 @@ class InMemoryGenerateMessagePort : GenerateMessagePort {
     }
 
     override suspend fun stream(
-        messages: List<Message>,
+        command: GenerateMessageCommand,
         onToken: suspend (String) -> Unit
     ): Either<InfrastructureError, Message> {
-        val lastMessage = messages.last()
+        val lastMessage = command.messages.last()
         val text = "AI response to: ${lastMessage.originalText}"
         for (word in text.split(" ")) {
             onToken("$word ")

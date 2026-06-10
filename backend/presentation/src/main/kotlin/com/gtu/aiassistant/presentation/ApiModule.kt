@@ -22,6 +22,10 @@ data class ApiDependencies(
     val continueChatWithAgentUseCase: com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentUseCase,
     val listChatsUseCase: com.gtu.aiassistant.domain.chat.port.input.ListChatsUseCase,
     val deleteChatUseCase: com.gtu.aiassistant.domain.chat.port.input.DeleteChatUseCase,
+    val uploadMaterialUseCase: com.gtu.aiassistant.domain.materials.port.input.UploadMaterialUseCase,
+    val listMaterialsUseCase: com.gtu.aiassistant.domain.materials.port.input.ListMaterialsUseCase,
+    val downloadMaterialUseCase: com.gtu.aiassistant.domain.materials.port.input.DownloadMaterialUseCase,
+    val deleteMaterialUseCase: com.gtu.aiassistant.domain.materials.port.input.DeleteMaterialUseCase,
     val jwtSecret: String,
     val jwtIssuer: String
 )

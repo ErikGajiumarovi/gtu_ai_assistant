@@ -13,6 +13,7 @@ import arrow.core.raise.ensure
 import com.gtu.aiassistant.domain.chat.model.Message as DomainMessage
 import ai.koog.prompt.message.Message as KoogMessage
 import com.gtu.aiassistant.domain.chat.model.MessageSenderType
+import com.gtu.aiassistant.domain.chat.port.output.GenerateMessageCommand
 import com.gtu.aiassistant.domain.chat.port.output.GenerateMessagePort
 import com.gtu.aiassistant.domain.chat.port.output.validateForMessageGeneration
 import com.gtu.aiassistant.domain.model.InfrastructureError
@@ -28,22 +29,22 @@ class GenerateMessagePortImpl private constructor(
     private val model: LLModel
 ) : GenerateMessagePort {
 
-    override suspend fun invoke(messages: List<DomainMessage>): Either<InfrastructureError, DomainMessage> =
+    override suspend fun invoke(command: GenerateMessageCommand): Either<InfrastructureError, DomainMessage> =
         withContext(Dispatchers.IO) {
             either {
-                val validMessages = commonValidate(messages).bind()
+                val validMessages = commonValidate(command.messages).bind()
                 val generatedText = commonExecute(validMessages).bind()
                 buildMessage(validMessages, generatedText)
             }
         }
 
     override suspend fun stream(
-        messages: List<DomainMessage>,
+        command: GenerateMessageCommand,
         onToken: suspend (String) -> Unit
     ): Either<InfrastructureError, DomainMessage> =
         withContext(Dispatchers.IO) {
             either {
-                val validMessages = commonValidate(messages).bind()
+                val validMessages = commonValidate(command.messages).bind()
                 val generatedText = commonExecute(validMessages).bind()
 
                 val words = generatedText.split(" ")

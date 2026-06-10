@@ -6,6 +6,7 @@ import com.gtu.aiassistant.domain.chat.model.Message
 import com.gtu.aiassistant.domain.chat.model.MessageCitation
 import com.gtu.aiassistant.domain.chat.model.MessageCitationSourceType
 import com.gtu.aiassistant.domain.chat.model.MessageSenderType
+import com.gtu.aiassistant.domain.materials.model.MaterialDocumentId
 import com.gtu.aiassistant.domain.user.model.UserId
 import org.jetbrains.exposed.v1.core.ResultRow
 import java.util.UUID
@@ -24,7 +25,12 @@ internal fun ResultRow.toDomainMessageCitation(): MessageCitation =
         title = this[ChatMessageCitationRecords.title],
         url = this[ChatMessageCitationRecords.url],
         snippet = this[ChatMessageCitationRecords.snippet],
-        sourceType = MessageCitationSourceType.valueOf(this[ChatMessageCitationRecords.sourceType])
+        sourceType = MessageCitationSourceType.valueOf(this[ChatMessageCitationRecords.sourceType]),
+        documentId = this[ChatMessageCitationRecords.documentId]?.let { value ->
+            MaterialDocumentId.fromTrusted(UUID.fromString(value))
+        },
+        pageStart = this[ChatMessageCitationRecords.pageStart],
+        pageEnd = this[ChatMessageCitationRecords.pageEnd]
     )
 
 internal fun ResultRow.toChatSnapshot(messages: List<Message>): Chat =

@@ -17,7 +17,22 @@ object PersistenceSchema {
                 KnowledgeSourcesTable,
                 KnowledgeDocumentsTable,
                 KnowledgeChunksTable,
-                IngestionRunsTable
+                IngestionRunsTable,
+                MaterialCollectionsTable,
+                MaterialDocumentsTable,
+                MaterialChunksTable,
+                MaterialIngestionJobsTable
+            )
+
+            exec("ALTER TABLE chat_message_citations ADD COLUMN IF NOT EXISTS document_id varchar(36)")
+            exec("ALTER TABLE chat_message_citations ADD COLUMN IF NOT EXISTS page_start integer")
+            exec("ALTER TABLE chat_message_citations ADD COLUMN IF NOT EXISTS page_end integer")
+
+            exec(
+                """
+                CREATE INDEX IF NOT EXISTS material_chunks_embedding_hnsw_idx
+                ON material_chunks USING hnsw (embedding vector_cosine_ops)
+                """.trimIndent()
             )
         }
     }

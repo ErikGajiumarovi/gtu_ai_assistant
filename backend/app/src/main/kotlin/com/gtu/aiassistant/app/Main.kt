@@ -4,16 +4,35 @@ import com.gtu.aiassistant.application.chat.ContinueChatWithAgentUseCaseImpl
 import com.gtu.aiassistant.application.chat.CreateChatWithAgentUseCaseImpl
 import com.gtu.aiassistant.application.chat.DeleteChatUseCaseImpl
 import com.gtu.aiassistant.application.chat.ListChatsUseCaseImpl
+import com.gtu.aiassistant.application.materials.DeleteMaterialUseCaseImpl
+import com.gtu.aiassistant.application.materials.DownloadMaterialUseCaseImpl
+import com.gtu.aiassistant.application.materials.ListMaterialsUseCaseImpl
+import com.gtu.aiassistant.application.materials.MaterialChunkBuilder
+import com.gtu.aiassistant.application.materials.MaterialIngestionWorker
+import com.gtu.aiassistant.application.materials.MaterialTextExtractionService
+import com.gtu.aiassistant.application.materials.UploadMaterialUseCaseImpl
 import com.gtu.aiassistant.application.user.LoginInUseCaseImpl
 import com.gtu.aiassistant.application.user.RegisterUserUseCaseImpl
+import com.gtu.aiassistant.app.materials.MaterialIngestionScheduler
+import com.gtu.aiassistant.app.materials.MaterialIngestionSchedulerConfig
+import com.gtu.aiassistant.app.memory.InMemoryDeleteMaterialChunksPort
+import com.gtu.aiassistant.app.memory.InMemoryDeleteMaterialCollectionPort
+import com.gtu.aiassistant.app.memory.InMemoryDeleteMaterialDocumentPort
+import com.gtu.aiassistant.app.memory.InMemoryFindMaterialCollectionPort
+import com.gtu.aiassistant.app.memory.InMemoryFindMaterialDocumentPort
+import com.gtu.aiassistant.app.memory.InMemoryReplaceMaterialDocumentChunksPort
+import com.gtu.aiassistant.app.memory.InMemorySaveMaterialChunksPort
+import com.gtu.aiassistant.app.memory.InMemorySearchUserMaterialsPort
 import com.gtu.aiassistant.infrastructure.ai.AgentGenerateMessagePortImpl
 import com.gtu.aiassistant.infrastructure.ai.AiConfig
 import com.gtu.aiassistant.infrastructure.ai.embedding.EmbeddingConfig
 import com.gtu.aiassistant.infrastructure.ai.embedding.EmbeddingMode
 import com.gtu.aiassistant.infrastructure.ai.embedding.EmbeddingPort
 import com.gtu.aiassistant.infrastructure.ai.embedding.EmbeddingPortFactory
+import com.gtu.aiassistant.infrastructure.ai.embedding.MaterialEmbeddingPortImpl
 import com.gtu.aiassistant.infrastructure.ai.tools.GtuKnowledgeSearchTool
 import com.gtu.aiassistant.infrastructure.ai.tools.GtuWebSearchTool
+import com.gtu.aiassistant.infrastructure.ai.tools.UserMaterialSearchTool
 import com.gtu.aiassistant.infrastructure.ai.tools.WebSearchConfig
 import com.gtu.aiassistant.infrastructure.ai.tools.WebSearchMode
 import com.gtu.aiassistant.app.memory.InMemoryDeleteChatPort
@@ -21,6 +40,8 @@ import com.gtu.aiassistant.app.memory.InMemoryExistsUserPort
 import com.gtu.aiassistant.app.memory.InMemoryFindChatPort
 import com.gtu.aiassistant.app.memory.InMemoryFindUserPort
 import com.gtu.aiassistant.app.memory.InMemoryGenerateMessagePort
+import com.gtu.aiassistant.app.memory.InMemorySaveMaterialCollectionPort
+import com.gtu.aiassistant.app.memory.InMemorySaveMaterialDocumentPort
 import com.gtu.aiassistant.app.memory.InMemorySaveChatPort
 import com.gtu.aiassistant.app.memory.InMemorySaveUserPort
 import com.gtu.aiassistant.app.memory.InMemoryState
@@ -37,6 +58,22 @@ import com.gtu.aiassistant.domain.knowledge.port.output.SaveKnowledgeIngestionRu
 import com.gtu.aiassistant.domain.knowledge.port.output.SearchKnowledgePort
 import com.gtu.aiassistant.domain.knowledge.port.output.UpsertKnowledgeDocumentPort
 import com.gtu.aiassistant.domain.knowledge.port.output.UpsertKnowledgeSourcesPort
+import com.gtu.aiassistant.domain.materials.port.input.DeleteMaterialUseCase
+import com.gtu.aiassistant.domain.materials.port.input.DownloadMaterialUseCase
+import com.gtu.aiassistant.domain.materials.port.input.ListMaterialsUseCase
+import com.gtu.aiassistant.domain.materials.port.input.UploadMaterialUseCase
+import com.gtu.aiassistant.domain.materials.port.output.DeleteMaterialChunksPort
+import com.gtu.aiassistant.domain.materials.port.output.DeleteMaterialCollectionPort
+import com.gtu.aiassistant.domain.materials.port.output.DeleteMaterialDocumentPort
+import com.gtu.aiassistant.domain.materials.port.output.FindMaterialCollectionPort
+import com.gtu.aiassistant.domain.materials.port.output.FindMaterialDocumentPort
+import com.gtu.aiassistant.domain.materials.port.output.MaterialEmbeddingPort
+import com.gtu.aiassistant.domain.materials.port.output.MaterialObjectStoragePort
+import com.gtu.aiassistant.domain.materials.port.output.ReplaceMaterialDocumentChunksPort
+import com.gtu.aiassistant.domain.materials.port.output.SaveMaterialCollectionPort
+import com.gtu.aiassistant.domain.materials.port.output.SaveMaterialChunksPort
+import com.gtu.aiassistant.domain.materials.port.output.SaveMaterialDocumentPort
+import com.gtu.aiassistant.domain.materials.port.output.SearchUserMaterialsPort
 import com.gtu.aiassistant.domain.user.port.input.LoginInUseCase
 import com.gtu.aiassistant.domain.user.port.input.RegisterUserUseCase
 import com.gtu.aiassistant.domain.user.port.output.ExistsUserPort
@@ -55,6 +92,16 @@ import com.gtu.aiassistant.infrastructure.persistence.knowledge.SaveKnowledgeIng
 import com.gtu.aiassistant.infrastructure.persistence.knowledge.SearchKnowledgePortImpl
 import com.gtu.aiassistant.infrastructure.persistence.knowledge.UpsertKnowledgeDocumentPortImpl
 import com.gtu.aiassistant.infrastructure.persistence.knowledge.UpsertKnowledgeSourcesPortImpl
+import com.gtu.aiassistant.infrastructure.persistence.materials.DeleteMaterialCollectionPortImpl
+import com.gtu.aiassistant.infrastructure.persistence.materials.DeleteMaterialChunksPortImpl
+import com.gtu.aiassistant.infrastructure.persistence.materials.DeleteMaterialDocumentPortImpl
+import com.gtu.aiassistant.infrastructure.persistence.materials.FindMaterialCollectionPortImpl
+import com.gtu.aiassistant.infrastructure.persistence.materials.FindMaterialDocumentPortImpl
+import com.gtu.aiassistant.infrastructure.persistence.materials.ReplaceMaterialDocumentChunksPortImpl
+import com.gtu.aiassistant.infrastructure.persistence.materials.SaveMaterialCollectionPortImpl
+import com.gtu.aiassistant.infrastructure.persistence.materials.SaveMaterialChunksPortImpl
+import com.gtu.aiassistant.infrastructure.persistence.materials.SaveMaterialDocumentPortImpl
+import com.gtu.aiassistant.infrastructure.persistence.materials.SearchUserMaterialsPortImpl
 import com.gtu.aiassistant.infrastructure.persistence.support.JdbcPersistenceExecutor
 import com.gtu.aiassistant.infrastructure.persistence.user.ExistsUserPortImpl
 import com.gtu.aiassistant.infrastructure.persistence.user.FindUserPortImpl
@@ -64,6 +111,7 @@ import com.gtu.aiassistant.infrastructure.security.Argon2HashPasswordPortImpl
 import com.gtu.aiassistant.infrastructure.security.Argon2VerifyPasswordPortImpl
 import com.gtu.aiassistant.infrastructure.security.IssueJwtPortImpl
 import com.gtu.aiassistant.infrastructure.security.JwtConfig
+import com.gtu.aiassistant.infrastructure.storage.LocalMaterialObjectStoragePort
 import com.gtu.aiassistant.infrastructure.knowledge.DisabledSaveKnowledgeIngestionRunPort
 import com.gtu.aiassistant.infrastructure.knowledge.DisabledSearchKnowledgePort
 import com.gtu.aiassistant.infrastructure.knowledge.DisabledUpsertKnowledgeDocumentPort
@@ -82,7 +130,9 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import org.koin.core.context.startKoin
 import org.koin.dsl.module
+import java.nio.file.Path
 import java.time.ZoneId
+import kotlin.time.Duration.Companion.seconds
 
 fun main() {
     val runtimeConfig = RuntimeConfig.fromEnvironment()
@@ -91,6 +141,7 @@ fun main() {
     }.koin
 
     koin.get<KnowledgeIngestionScheduler>().start()
+    koin.get<MaterialIngestionScheduler>().start()
 
     embeddedServer(
         factory = Netty,
@@ -105,6 +156,10 @@ fun main() {
                 continueChatWithAgentUseCase = koin.get(),
                 listChatsUseCase = koin.get(),
                 deleteChatUseCase = koin.get(),
+                uploadMaterialUseCase = koin.get(),
+                listMaterialsUseCase = koin.get(),
+                downloadMaterialUseCase = koin.get(),
+                deleteMaterialUseCase = koin.get(),
                 jwtSecret = runtimeConfig.jwtSecret,
                 jwtIssuer = runtimeConfig.jwtIssuer
             )
@@ -126,6 +181,7 @@ private fun appModule(
         )
     }
     single<EmbeddingPort> { EmbeddingPortFactory.create(get(), get()) }
+    single<MaterialEmbeddingPort> { MaterialEmbeddingPortImpl(get()) }
     single {
         KnowledgeIngestionConfig(
             enabled = runtimeConfig.ragEnabled,
@@ -153,6 +209,7 @@ private fun appModule(
         )
     }
     single { GtuKnowledgeSearchTool(get()) }
+    single { UserMaterialSearchTool(get()) }
     single { GtuWebSearchTool(get(), get(), get()) }
 
     when (runtimeConfig.aiMode) {
@@ -169,7 +226,7 @@ private fun appModule(
                     model = runtimeConfig.aiModel
                 )
             }
-            single<GenerateMessagePort> { AgentGenerateMessagePortImpl.create(get(), get(), get()) }
+            single<GenerateMessagePort> { AgentGenerateMessagePortImpl.create(get(), get(), get(), get()) }
         }
     }
 
@@ -183,6 +240,17 @@ private fun appModule(
     single<HashPasswordPort> { Argon2HashPasswordPortImpl() }
     single<VerifyPasswordPort> { Argon2VerifyPasswordPortImpl() }
     single<IssueJwtPort> { IssueJwtPortImpl(get()) }
+    single<MaterialObjectStoragePort> { LocalMaterialObjectStoragePort(Path.of(runtimeConfig.localStorageDir)) }
+    single { MaterialTextExtractionService() }
+    single { MaterialChunkBuilder() }
+    single {
+        MaterialIngestionSchedulerConfig(
+            enabled = runtimeConfig.materialIngestionEnabled,
+            interval = runtimeConfig.materialIngestionIntervalSeconds.seconds
+        )
+    }
+    single { MaterialIngestionWorker(get(), get(), get(), get(), get(), get(), get()) }
+    single { MaterialIngestionScheduler(get(), get()) }
 
     when (runtimeConfig.persistenceMode) {
         PersistenceMode.MEMORY -> {
@@ -196,6 +264,16 @@ private fun appModule(
             single<FindChatPort> { InMemoryFindChatPort(get()) }
             single<SaveChatPort> { InMemorySaveChatPort(get()) }
             single<DeleteChatPort> { InMemoryDeleteChatPort(get()) }
+            single<FindMaterialDocumentPort> { InMemoryFindMaterialDocumentPort(get()) }
+            single<SaveMaterialDocumentPort> { InMemorySaveMaterialDocumentPort(get()) }
+            single<DeleteMaterialDocumentPort> { InMemoryDeleteMaterialDocumentPort(get()) }
+            single<SaveMaterialChunksPort> { InMemorySaveMaterialChunksPort(get()) }
+            single<ReplaceMaterialDocumentChunksPort> { InMemoryReplaceMaterialDocumentChunksPort(get()) }
+            single<DeleteMaterialChunksPort> { InMemoryDeleteMaterialChunksPort(get()) }
+            single<SearchUserMaterialsPort> { InMemorySearchUserMaterialsPort(get()) }
+            single<FindMaterialCollectionPort> { InMemoryFindMaterialCollectionPort() }
+            single<SaveMaterialCollectionPort> { InMemorySaveMaterialCollectionPort() }
+            single<DeleteMaterialCollectionPort> { InMemoryDeleteMaterialCollectionPort() }
             single<SearchKnowledgePort> { DisabledSearchKnowledgePort() }
             single<UpsertKnowledgeDocumentPort> { DisabledUpsertKnowledgeDocumentPort() }
             single<UpsertKnowledgeSourcesPort> { DisabledUpsertKnowledgeSourcesPort() }
@@ -220,6 +298,16 @@ private fun appModule(
             single<FindChatPort> { FindChatPortImpl(get()) }
             single<SaveChatPort> { SaveChatPortImpl(get()) }
             single<DeleteChatPort> { DeleteChatPortImpl(get()) }
+            single<FindMaterialDocumentPort> { FindMaterialDocumentPortImpl(get()) }
+            single<SaveMaterialDocumentPort> { SaveMaterialDocumentPortImpl(get()) }
+            single<DeleteMaterialDocumentPort> { DeleteMaterialDocumentPortImpl(get()) }
+            single<SaveMaterialChunksPort> { SaveMaterialChunksPortImpl(get()) }
+            single<ReplaceMaterialDocumentChunksPort> { ReplaceMaterialDocumentChunksPortImpl(get()) }
+            single<DeleteMaterialChunksPort> { DeleteMaterialChunksPortImpl(get()) }
+            single<SearchUserMaterialsPort> { SearchUserMaterialsPortImpl(get(), get()) }
+            single<FindMaterialCollectionPort> { FindMaterialCollectionPortImpl(get()) }
+            single<SaveMaterialCollectionPort> { SaveMaterialCollectionPortImpl(get()) }
+            single<DeleteMaterialCollectionPort> { DeleteMaterialCollectionPortImpl(get()) }
             single<SearchKnowledgePort> {
                 if (runtimeConfig.ragEnabled) {
                     SearchKnowledgePortImpl(get(), get())
@@ -257,6 +345,10 @@ private fun appModule(
     single<ContinueChatWithAgentUseCase> { ContinueChatWithAgentUseCaseImpl(get(), get(), get()) }
     single<ListChatsUseCase> { ListChatsUseCaseImpl(get()) }
     single<DeleteChatUseCase> { DeleteChatUseCaseImpl(get(), get()) }
+    single<UploadMaterialUseCase> { UploadMaterialUseCaseImpl(get(), get(), get(), runtimeConfig.materialMaxFileSizeBytes) }
+    single<ListMaterialsUseCase> { ListMaterialsUseCaseImpl(get()) }
+    single<DownloadMaterialUseCase> { DownloadMaterialUseCaseImpl(get(), get()) }
+    single<DeleteMaterialUseCase> { DeleteMaterialUseCaseImpl(get(), get(), get(), get()) }
 }
 
 private data class RuntimeConfig(
@@ -289,7 +381,11 @@ private data class RuntimeConfig(
     val embeddingModel: String,
     val embeddingDimensions: Int,
     val webSearchMode: WebSearchMode,
-    val webSearchMaxResults: Int
+    val webSearchMaxResults: Int,
+    val localStorageDir: String,
+    val materialMaxFileSizeBytes: Long,
+    val materialIngestionEnabled: Boolean,
+    val materialIngestionIntervalSeconds: Int
 ) {
     companion object {
         fun fromEnvironment(): RuntimeConfig {
@@ -336,7 +432,13 @@ private data class RuntimeConfig(
                 embeddingModel = System.getenv("APP_EMBEDDING_MODEL") ?: "text-embedding-3-small",
                 embeddingDimensions = (System.getenv("APP_EMBEDDING_DIMENSIONS") ?: "384").toInt(),
                 webSearchMode = WebSearchMode.from(System.getenv("APP_WEB_SEARCH_MODE")),
-                webSearchMaxResults = (System.getenv("APP_WEB_SEARCH_MAX_RESULTS") ?: "6").toInt()
+                webSearchMaxResults = (System.getenv("APP_WEB_SEARCH_MAX_RESULTS") ?: "6").toInt(),
+                localStorageDir = System.getenv("APP_LOCAL_STORAGE_DIR") ?: "./local-storage",
+                materialMaxFileSizeBytes = (System.getenv("APP_MATERIAL_MAX_FILE_SIZE_BYTES") ?: "52428800").toLong(),
+                materialIngestionEnabled = System.getenv("APP_MATERIAL_INGESTION_ENABLED").toBoolean(default = true),
+                materialIngestionIntervalSeconds = (System.getenv("APP_MATERIAL_INGESTION_INTERVAL_SECONDS") ?: "10")
+                    .toInt()
+                    .coerceAtLeast(1)
             )
         }
     }

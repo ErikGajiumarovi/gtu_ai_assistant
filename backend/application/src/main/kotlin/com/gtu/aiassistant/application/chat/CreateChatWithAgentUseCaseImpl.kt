@@ -7,6 +7,7 @@ import com.gtu.aiassistant.domain.chat.model.ChatId
 import com.gtu.aiassistant.domain.chat.port.input.CreateChatWithAgentError
 import com.gtu.aiassistant.domain.chat.port.input.CreateChatWithAgentResult
 import com.gtu.aiassistant.domain.chat.port.input.CreateChatWithAgentUseCase
+import com.gtu.aiassistant.domain.chat.port.output.GenerateMessageCommand
 import com.gtu.aiassistant.domain.chat.port.output.GenerateMessagePort
 import com.gtu.aiassistant.domain.chat.port.output.SaveChatPort
 import com.gtu.aiassistant.domain.chat.port.output.validateForMessageGeneration
@@ -31,7 +32,7 @@ class CreateChatWithAgentUseCaseImpl(
                 .bind()
 
             val generatedMessage = generateMessagePort
-                .invoke(historyForGeneration)
+                .invoke(command.toGenerateMessageCommand(historyForGeneration))
                 .mapLeft(CreateChatWithAgentError::MessageGenerationFailed)
                 .bind()
 
@@ -54,7 +55,7 @@ class CreateChatWithAgentUseCaseImpl(
                 .bind()
 
             val generatedMessage = generateMessagePort
-                .stream(historyForGeneration, onToken)
+                .stream(command.toGenerateMessageCommand(historyForGeneration), onToken)
                 .mapLeft(CreateChatWithAgentError::MessageGenerationFailed)
                 .bind()
 
@@ -86,3 +87,14 @@ class CreateChatWithAgentUseCaseImpl(
         CreateChatWithAgentResult(chat = persistedChat)
     }
 }
+
+private fun com.gtu.aiassistant.domain.chat.port.input.CreateChatWithAgentCommand.toGenerateMessageCommand(
+    messages: List<com.gtu.aiassistant.domain.chat.model.Message>
+): GenerateMessageCommand =
+    GenerateMessageCommand(
+        messages = messages,
+        userId = userId,
+        sourceMode = sourceMode,
+        collectionIds = collectionIds,
+        documentIds = documentIds
+    )

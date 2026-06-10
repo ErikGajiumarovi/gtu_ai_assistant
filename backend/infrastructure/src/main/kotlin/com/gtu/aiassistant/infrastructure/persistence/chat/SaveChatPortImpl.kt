@@ -68,7 +68,10 @@ class SaveChatPortImpl(
                         title = citation.title,
                         url = citation.url,
                         snippet = citation.snippet,
-                        sourceType = citation.sourceType.name
+                        sourceType = citation.sourceType.name,
+                        documentId = citation.documentId?.value?.toString(),
+                        pageStart = citation.pageStart,
+                        pageEnd = citation.pageEnd
                     )
                 }
             }
@@ -80,6 +83,9 @@ class SaveChatPortImpl(
                 this[ChatMessageCitationRecords.url] = citation.url
                 this[ChatMessageCitationRecords.snippet] = citation.snippet
                 this[ChatMessageCitationRecords.sourceType] = citation.sourceType
+                this[ChatMessageCitationRecords.documentId] = citation.documentId
+                this[ChatMessageCitationRecords.pageStart] = citation.pageStart
+                this[ChatMessageCitationRecords.pageEnd] = citation.pageEnd
             }
 
             chat
@@ -92,5 +98,8 @@ private data class PersistableCitation(
     val title: String,
     val url: String,
     val snippet: String,
-    val sourceType: String
+    val sourceType: String,
+    val documentId: String?,
+    val pageStart: Int?,
+    val pageEnd: Int?
 )

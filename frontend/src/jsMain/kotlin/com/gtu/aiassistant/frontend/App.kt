@@ -2,8 +2,10 @@ package com.gtu.aiassistant.frontend
 
 import androidx.compose.runtime.*
 import com.gtu.aiassistant.shared.*
+import kotlinx.browser.window
 import kotlinx.browser.localStorage
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.await
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -11,6 +13,8 @@ import org.jetbrains.compose.web.attributes.*
 import org.jetbrains.compose.web.css.*
 import org.jetbrains.compose.web.dom.*
 import org.jetbrains.compose.web.renderComposable
+import org.w3c.fetch.Headers
+import org.w3c.fetch.RequestInit
 import org.w3c.dom.HTMLElement
 import org.w3c.dom.HTMLInputElement
 import org.w3c.dom.HTMLTextAreaElement
@@ -127,6 +131,15 @@ fun App() {
                     notice = notice, selectedChat = selectedChat, isStreaming = isStreaming,
                     streamingText = streamingText, pendingUserText = pendingUserText,
                     onDismissNotice = { notice = null },
+                    onOpenMaterialCitation = { url ->
+                        scope.launch {
+                            try {
+                                openAuthenticatedDownload(url, session!!.jwt)
+                            } catch (e: Exception) {
+                                showError("Download failed", e)
+                            }
+                        }
+                    },
                     onSubmit = { text ->
                         scope.launch {
                             val trimmed = text.trim(); if (trimmed.isEmpty()) return@launch
@@ -248,6 +261,7 @@ private fun ChatScreen(
     notice: Notice?, selectedChat: ChatResponse?,
     isStreaming: Boolean, streamingText: String, pendingUserText: String,
     onDismissNotice: () -> Unit,
+    onOpenMaterialCitation: (String) -> Unit,
     onSubmit: (String) -> Unit
 ) {
     val scrollRef = remember { mutableStateOf<HTMLElement?>(null) }
@@ -282,7 +296,8 @@ private fun ChatScreen(
                         text = message.originalText,
                         isUser = isUser,
                         time = formatMessageTime(message.createdAt),
-                        citations = if (!isUser) message.citations else emptyList()
+                        citations = if (!isUser) message.citations else emptyList(),
+                        onOpenMaterialCitation = onOpenMaterialCitation
                     )
                     Spacer(12)
                 }
@@ -349,7 +364,8 @@ private fun ChatScreen(
 private fun MessageBubble(
     text: String, isUser: Boolean, time: String,
     citations: List<CitationResponse> = emptyList(),
-    isStreaming: Boolean = false
+    isStreaming: Boolean = false,
+    onOpenMaterialCitation: (String) -> Unit = {}
 ) {
     Div(attrs = { style { display(DisplayStyle.Flex); justifyContent(if (isUser) JustifyContent.End else JustifyContent.Start) } }) {
         Div(attrs = { style { property("max-width", "85%") } }) {
@@ -378,6 +394,12 @@ private fun MessageBubble(
                     for (citation in citations) {
                         A(href = citation.url, attrs = {
                             attr("target", "_blank"); attr("rel", "noreferrer noopener")
+                            if (citation.sourceType == "USER_MATERIAL" && citation.documentId != null) {
+                                onClick { event ->
+                                    event.preventDefault()
+                                    onOpenMaterialCitation(citation.url)
+                                }
+                            }
                             title(citation.snippet.ifEmpty { citation.title })
                             style {
                                 fontSize(12.px); color(Color("#666")); textDecoration("none")
@@ -386,7 +408,7 @@ private fun MessageBubble(
                                 backgroundColor(Color("#fafafa"))
                             }
                         }) {
-                            Text("${if (citation.sourceType == "WEB") "\uD83C\uDF10" else "\uD83C\uDFDB"} ${citation.title.ifEmpty { getHostname(citation.url) }}")
+                            Text(citation.toCitationLabel())
                         }
                     }
                 }
@@ -522,6 +544,32 @@ private fun getHostname(url: String): String {
     return try {
         url.removePrefix("https://").removePrefix("http://").split("/").firstOrNull() ?: url
     } catch (_: Exception) { url }
+}
+
+private fun CitationResponse.toCitationLabel(): String {
+    val prefix = when (sourceType) {
+        "WEB" -> "Web"
+        "USER_MATERIAL" -> "File"
+        else -> "GTU"
+    }
+    val location = when {
+        pageStart != null && pageEnd != null && pageEnd != pageStart -> " pp. $pageStart-$pageEnd"
+        pageStart != null -> " p. $pageStart"
+        else -> ""
+    }
+    val label = title.ifEmpty { getHostname(url) }
+    return "$prefix: $label$location"
+}
+
+private suspend fun openAuthenticatedDownload(url: String, jwt: String) {
+    val headers = Headers().also { it.set("Authorization", "Bearer $jwt") }
+    val response = window.fetch(url, RequestInit(method = "GET", headers = headers)).await()
+    if (!response.ok) {
+        throw ApiClientError("HTTP ${response.status}", "download_error", response.status.toInt())
+    }
+    val blob = response.blob().await()
+    val objectUrl = js("URL").createObjectURL(blob).unsafeCast<String>()
+    window.open(objectUrl, "_blank")
 }
 
 private fun isUnauthorized(error: Exception): Boolean =

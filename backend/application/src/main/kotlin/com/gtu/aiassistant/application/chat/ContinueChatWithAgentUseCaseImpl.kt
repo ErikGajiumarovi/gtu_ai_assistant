@@ -8,6 +8,7 @@ import com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentError
 import com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentResult
 import com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentUseCase
 import com.gtu.aiassistant.domain.chat.port.output.FindChatPort
+import com.gtu.aiassistant.domain.chat.port.output.GenerateMessageCommand
 import com.gtu.aiassistant.domain.chat.port.output.GenerateMessagePort
 import com.gtu.aiassistant.domain.chat.port.output.SaveChatPort
 import com.gtu.aiassistant.domain.chat.port.output.validateForMessageGeneration
@@ -24,7 +25,7 @@ class ContinueChatWithAgentUseCaseImpl(
             val existingChat = resolveChat(command).bind()
             val historyForGeneration = buildHistory(existingChat, command).bind()
             val generatedMessage = generateMessagePort
-                .invoke(historyForGeneration)
+                .invoke(command.toGenerateMessageCommand(historyForGeneration))
                 .mapLeft(ContinueChatWithAgentError::MessageGenerationFailed)
                 .bind()
             saveUpdatedChat(existingChat, command, generatedMessage).bind()
@@ -38,7 +39,7 @@ class ContinueChatWithAgentUseCaseImpl(
             val existingChat = resolveChat(command).bind()
             val historyForGeneration = buildHistory(existingChat, command).bind()
             val generatedMessage = generateMessagePort
-                .stream(historyForGeneration, onToken)
+                .stream(command.toGenerateMessageCommand(historyForGeneration), onToken)
                 .mapLeft(ContinueChatWithAgentError::MessageGenerationFailed)
                 .bind()
             saveUpdatedChat(existingChat, command, generatedMessage).bind()
@@ -99,4 +100,15 @@ private fun Chat.appendMessages(
         createdAt = createdAt,
         updatedAt = aiMessage.createdAt,
         ownedBy = ownedBy
+    )
+
+private fun com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentCommand.toGenerateMessageCommand(
+    messages: List<com.gtu.aiassistant.domain.chat.model.Message>
+): GenerateMessageCommand =
+    GenerateMessageCommand(
+        messages = messages,
+        userId = userId,
+        sourceMode = sourceMode,
+        collectionIds = collectionIds,
+        documentIds = documentIds
     )

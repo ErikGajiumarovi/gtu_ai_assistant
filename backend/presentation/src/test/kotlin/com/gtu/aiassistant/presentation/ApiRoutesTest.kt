@@ -8,8 +8,16 @@ import com.gtu.aiassistant.domain.chat.model.Message
 import com.gtu.aiassistant.domain.chat.model.MessageSenderType
 import com.gtu.aiassistant.domain.chat.port.input.CreateChatWithAgentCommand
 import com.gtu.aiassistant.domain.chat.port.input.CreateChatWithAgentResult
+import com.gtu.aiassistant.domain.chat.port.input.CreateChatWithAgentUseCase
+import com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentCommand
+import com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentResult
+import com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentUseCase
 import com.gtu.aiassistant.domain.chat.port.input.DeleteChatResult
 import com.gtu.aiassistant.domain.chat.port.input.ListChatsResult
+import com.gtu.aiassistant.domain.materials.port.input.DeleteMaterialResult
+import com.gtu.aiassistant.domain.materials.port.input.DownloadMaterialError
+import com.gtu.aiassistant.domain.materials.port.input.ListMaterialsResult
+import com.gtu.aiassistant.domain.materials.port.input.UploadMaterialError
 import com.gtu.aiassistant.domain.user.model.UserEmail
 import com.gtu.aiassistant.domain.user.model.UserId
 import com.gtu.aiassistant.domain.user.model.UserLastName
@@ -128,7 +136,7 @@ class ApiRoutesTest {
         application {
             configureApi(
                 apiDependencies(
-                    createChatWithAgentUseCase = { command ->
+                    createChatWithAgentUseCase = createChatUseCase { command ->
                         receivedCommand = command
                         arrow.core.Either.Right(
                             CreateChatWithAgentResult(
@@ -158,25 +166,34 @@ class ApiRoutesTest {
         loginInUseCase: com.gtu.aiassistant.domain.user.port.input.LoginInUseCase = com.gtu.aiassistant.domain.user.port.input.LoginInUseCase {
             arrow.core.Either.Right(LoginInResult(jwt = "jwt-token"))
         },
-        createChatWithAgentUseCase: com.gtu.aiassistant.domain.chat.port.input.CreateChatWithAgentUseCase = com.gtu.aiassistant.domain.chat.port.input.CreateChatWithAgentUseCase {
-            arrow.core.Either.Right(CreateChatWithAgentResult(chat = sampleChat(userId = it.userId)))
+        createChatWithAgentUseCase: CreateChatWithAgentUseCase = createChatUseCase { command ->
+            arrow.core.Either.Right(CreateChatWithAgentResult(chat = sampleChat(userId = command.userId)))
+        },
+        continueChatWithAgentUseCase: ContinueChatWithAgentUseCase = continueChatUseCase { command ->
+            arrow.core.Either.Right(ContinueChatWithAgentResult(chat = sampleChat(userId = command.userId)))
         }
     ) = ApiDependencies(
         registerUserUseCase = registerUserUseCase,
         loginInUseCase = loginInUseCase,
         createChatWithAgentUseCase = createChatWithAgentUseCase,
-        continueChatWithAgentUseCase = com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentUseCase {
-            arrow.core.Either.Right(
-                com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentResult(
-                    chat = sampleChat(userId = it.userId)
-                )
-            )
-        },
+        continueChatWithAgentUseCase = continueChatWithAgentUseCase,
         listChatsUseCase = com.gtu.aiassistant.domain.chat.port.input.ListChatsUseCase {
             arrow.core.Either.Right(ListChatsResult(chats = emptyList()))
         },
         deleteChatUseCase = com.gtu.aiassistant.domain.chat.port.input.DeleteChatUseCase {
             arrow.core.Either.Right(DeleteChatResult)
+        },
+        uploadMaterialUseCase = com.gtu.aiassistant.domain.materials.port.input.UploadMaterialUseCase {
+            arrow.core.Either.Left(UploadMaterialError.UnsupportedFileType)
+        },
+        listMaterialsUseCase = com.gtu.aiassistant.domain.materials.port.input.ListMaterialsUseCase {
+            arrow.core.Either.Right(ListMaterialsResult(documents = emptyList()))
+        },
+        downloadMaterialUseCase = com.gtu.aiassistant.domain.materials.port.input.DownloadMaterialUseCase {
+            arrow.core.Either.Left(DownloadMaterialError.DocumentNotFound)
+        },
+        deleteMaterialUseCase = com.gtu.aiassistant.domain.materials.port.input.DeleteMaterialUseCase {
+            arrow.core.Either.Right(DeleteMaterialResult(deleted = false))
         },
         jwtSecret = jwtSecret,
         jwtIssuer = jwtIssuer
@@ -189,6 +206,28 @@ class ApiRoutesTest {
             .withClaim("email", email)
             .withExpiresAt(Date.from(Instant.now().plusSeconds(3600)))
             .sign(Algorithm.HMAC256(jwtSecret))
+}
+
+private fun createChatUseCase(
+    handler: suspend (CreateChatWithAgentCommand) -> arrow.core.Either<com.gtu.aiassistant.domain.chat.port.input.CreateChatWithAgentError, CreateChatWithAgentResult>
+): CreateChatWithAgentUseCase = object : CreateChatWithAgentUseCase {
+    override suspend fun invoke(command: CreateChatWithAgentCommand) = handler(command)
+
+    override suspend fun stream(
+        command: CreateChatWithAgentCommand,
+        onToken: suspend (String) -> Unit
+    ) = handler(command)
+}
+
+private fun continueChatUseCase(
+    handler: suspend (ContinueChatWithAgentCommand) -> arrow.core.Either<com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentError, ContinueChatWithAgentResult>
+): ContinueChatWithAgentUseCase = object : ContinueChatWithAgentUseCase {
+    override suspend fun invoke(command: ContinueChatWithAgentCommand) = handler(command)
+
+    override suspend fun stream(
+        command: ContinueChatWithAgentCommand,
+        onToken: suspend (String) -> Unit
+    ) = handler(command)
 }
 
 private fun sampleUser(email: String): com.gtu.aiassistant.domain.user.model.User =

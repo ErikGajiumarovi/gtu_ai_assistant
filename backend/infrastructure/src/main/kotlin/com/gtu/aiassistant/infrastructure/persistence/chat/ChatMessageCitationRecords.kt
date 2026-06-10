@@ -10,4 +10,7 @@ internal object ChatMessageCitationRecords {
     val url = table.url
     val snippet = table.snippet
     val sourceType = table.sourceType
+    val documentId = table.documentId
+    val pageStart = table.pageStart
+    val pageEnd = table.pageEnd
 }

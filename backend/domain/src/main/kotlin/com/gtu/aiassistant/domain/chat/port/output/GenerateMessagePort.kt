@@ -3,15 +3,27 @@ package com.gtu.aiassistant.domain.chat.port.output
 import arrow.core.Either
 import arrow.core.raise.either
 import arrow.core.raise.ensure
+import com.gtu.aiassistant.domain.chat.model.ChatSourceMode
 import com.gtu.aiassistant.domain.chat.model.Message
 import com.gtu.aiassistant.domain.chat.model.MessageSenderType
+import com.gtu.aiassistant.domain.materials.model.MaterialCollectionId
+import com.gtu.aiassistant.domain.materials.model.MaterialDocumentId
 import com.gtu.aiassistant.domain.model.DomainError
 import com.gtu.aiassistant.domain.model.InfrastructureError
+import com.gtu.aiassistant.domain.user.model.UserId
 
 interface GenerateMessagePort {
-    suspend operator fun invoke(messages: List<Message>): Either<InfrastructureError, Message>
-    suspend fun stream(messages: List<Message>, onToken: suspend (String) -> Unit): Either<InfrastructureError, Message>
+    suspend operator fun invoke(command: GenerateMessageCommand): Either<InfrastructureError, Message>
+    suspend fun stream(command: GenerateMessageCommand, onToken: suspend (String) -> Unit): Either<InfrastructureError, Message>
 }
+
+data class GenerateMessageCommand(
+    val messages: List<Message>,
+    val userId: UserId,
+    val sourceMode: ChatSourceMode = ChatSourceMode.GTU_AND_MY_MATERIALS,
+    val collectionIds: List<MaterialCollectionId> = emptyList(),
+    val documentIds: List<MaterialDocumentId> = emptyList()
+)
 
 fun List<Message>.validateForMessageGeneration(): Either<DomainError, List<Message>> =
     either {

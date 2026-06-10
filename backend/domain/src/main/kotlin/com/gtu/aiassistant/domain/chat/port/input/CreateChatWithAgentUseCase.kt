@@ -2,7 +2,10 @@ package com.gtu.aiassistant.domain.chat.port.input
 
 import arrow.core.Either
 import com.gtu.aiassistant.domain.chat.model.Chat
+import com.gtu.aiassistant.domain.chat.model.ChatSourceMode
 import com.gtu.aiassistant.domain.chat.model.Message
+import com.gtu.aiassistant.domain.materials.model.MaterialCollectionId
+import com.gtu.aiassistant.domain.materials.model.MaterialDocumentId
 import com.gtu.aiassistant.domain.model.DomainError
 import com.gtu.aiassistant.domain.model.InfrastructureError
 import com.gtu.aiassistant.domain.user.model.UserId
@@ -17,7 +20,10 @@ interface CreateChatWithAgentUseCase {
 
 data class CreateChatWithAgentCommand(
     val userId: UserId,
-    val message: Message
+    val message: Message,
+    val sourceMode: ChatSourceMode = ChatSourceMode.GTU_AND_MY_MATERIALS,
+    val collectionIds: List<MaterialCollectionId> = emptyList(),
+    val documentIds: List<MaterialDocumentId> = emptyList()
 )
 
 data class CreateChatWithAgentResult(

@@ -22,13 +22,27 @@ data class LoginInResponse(
 )
 
 @Serializable
+enum class AgentSourceMode {
+    GTU_ONLY,
+    MY_MATERIALS_ONLY,
+    GTU_AND_MY_MATERIALS,
+    GTU_MY_MATERIALS_AND_WEB
+}
+
+@Serializable
 data class CreateChatWithAgentRequest(
-    val originalText: String
+    val originalText: String,
+    val sourceMode: AgentSourceMode = AgentSourceMode.GTU_AND_MY_MATERIALS,
+    val collectionIds: List<String> = emptyList(),
+    val documentIds: List<String> = emptyList()
 )
 
 @Serializable
 data class ContinueChatWithAgentRequest(
-    val originalText: String
+    val originalText: String,
+    val sourceMode: AgentSourceMode = AgentSourceMode.GTU_AND_MY_MATERIALS,
+    val collectionIds: List<String> = emptyList(),
+    val documentIds: List<String> = emptyList()
 )
 
 @Serializable
@@ -54,7 +68,10 @@ data class CitationResponse(
     val title: String,
     val url: String,
     val snippet: String,
-    val sourceType: String
+    val sourceType: String,
+    val documentId: String? = null,
+    val pageStart: Int? = null,
+    val pageEnd: Int? = null
 )
 
 @Serializable

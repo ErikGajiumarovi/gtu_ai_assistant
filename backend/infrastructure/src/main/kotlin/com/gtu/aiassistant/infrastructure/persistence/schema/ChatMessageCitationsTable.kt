@@ -10,6 +10,9 @@ object ChatMessageCitationsTable : Table(name = "chat_message_citations") {
     val url = text("url")
     val snippet = text("snippet")
     val sourceType = varchar("source_type", length = 16)
+    val documentId = varchar("document_id", length = 36).nullable()
+    val pageStart = integer("page_start").nullable()
+    val pageEnd = integer("page_end").nullable()
 
     override val primaryKey = PrimaryKey(messageId, orderIndex)
 }
