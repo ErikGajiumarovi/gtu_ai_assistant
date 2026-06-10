@@ -21,6 +21,7 @@ class MaterialDocument private constructor(
     val storageObjectKey: String,
     val ingestionStatus: MaterialIngestionStatus,
     val ingestionError: String?,
+    val ocrMetadata: String?,
     val createdAt: Instant,
     val updatedAt: Instant
 ) : AggregateRoot<MaterialDocumentId>(id, version) {
@@ -37,6 +38,7 @@ class MaterialDocument private constructor(
             storageObjectKey: String,
             ingestionStatus: MaterialIngestionStatus,
             ingestionError: String?,
+            ocrMetadata: String?,
             createdAt: Instant,
             updatedAt: Instant
         ): Either<DomainError, MaterialDocument> =
@@ -60,6 +62,7 @@ class MaterialDocument private constructor(
                     storageObjectKey = storageObjectKey.trim(),
                     ingestionStatus = ingestionStatus,
                     ingestionError = ingestionError?.trim()?.takeIf(String::isNotBlank),
+                    ocrMetadata = ocrMetadata?.trim()?.takeIf(String::isNotBlank),
                     createdAt = createdAt,
                     updatedAt = updatedAt
                 )
@@ -77,6 +80,7 @@ class MaterialDocument private constructor(
             storageObjectKey: String,
             ingestionStatus: MaterialIngestionStatus,
             ingestionError: String?,
+            ocrMetadata: String?,
             createdAt: Instant,
             updatedAt: Instant
         ): MaterialDocument =
@@ -92,6 +96,7 @@ class MaterialDocument private constructor(
                 storageObjectKey = storageObjectKey,
                 ingestionStatus = ingestionStatus,
                 ingestionError = ingestionError,
+                ocrMetadata = ocrMetadata,
                 createdAt = createdAt,
                 updatedAt = updatedAt
             )

@@ -95,6 +95,33 @@ data class DeleteChatResponse(
 )
 
 @Serializable
+data class MaterialResponse(
+    val id: String,
+    val version: Long,
+    val ownerUserId: String,
+    val collectionId: String?,
+    val title: String,
+    val originalFileName: String,
+    val contentType: String,
+    val sizeBytes: Long,
+    val ingestionStatus: String,
+    val ingestionError: String?,
+    val ocrMetadata: String?,
+    val createdAt: String,
+    val updatedAt: String
+)
+
+@Serializable
+data class ListMaterialsResponse(
+    val materials: List<MaterialResponse>
+)
+
+@Serializable
+data class DeleteMaterialResponse(
+    val deleted: Boolean
+)
+
+@Serializable
 data class HealthResponse(
     val status: String
 )

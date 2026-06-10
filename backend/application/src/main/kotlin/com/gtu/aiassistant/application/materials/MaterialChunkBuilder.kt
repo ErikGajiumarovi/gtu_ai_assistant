@@ -31,8 +31,8 @@ class MaterialChunkBuilder(
                     text = text,
                     embeddingInput = buildEmbeddingInput(document, segment.headingPath, text),
                     headingPath = segment.headingPath,
-                    pageStart = null,
-                    pageEnd = null
+                    pageStart = segment.pageStart,
+                    pageEnd = segment.pageEnd
                 )
                 if (end == words.size) break
                 start = (end - overlapWords).coerceAtLeast(start + 1)

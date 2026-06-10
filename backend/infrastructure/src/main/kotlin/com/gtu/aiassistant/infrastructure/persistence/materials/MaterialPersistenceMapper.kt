@@ -33,6 +33,7 @@ internal fun ResultRow.toDomainMaterialDocument(): MaterialDocument =
         storageObjectKey = this[MaterialDocumentRecords.storageObjectKey],
         ingestionStatus = MaterialIngestionStatus.valueOf(this[MaterialDocumentRecords.ingestionStatus]),
         ingestionError = this[MaterialDocumentRecords.ingestionError],
+        ocrMetadata = this[MaterialDocumentRecords.ocrMetadata],
         createdAt = this[MaterialDocumentRecords.createdAt],
         updatedAt = this[MaterialDocumentRecords.updatedAt]
     )

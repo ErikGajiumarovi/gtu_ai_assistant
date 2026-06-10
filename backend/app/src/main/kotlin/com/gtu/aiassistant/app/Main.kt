@@ -9,6 +9,7 @@ import com.gtu.aiassistant.application.materials.DownloadMaterialUseCaseImpl
 import com.gtu.aiassistant.application.materials.ListMaterialsUseCaseImpl
 import com.gtu.aiassistant.application.materials.MaterialChunkBuilder
 import com.gtu.aiassistant.application.materials.MaterialIngestionWorker
+import com.gtu.aiassistant.application.materials.MaterialTextExtractionConfig
 import com.gtu.aiassistant.application.materials.MaterialTextExtractionService
 import com.gtu.aiassistant.application.materials.UploadMaterialUseCaseImpl
 import com.gtu.aiassistant.application.user.LoginInUseCaseImpl
@@ -68,6 +69,7 @@ import com.gtu.aiassistant.domain.materials.port.output.DeleteMaterialDocumentPo
 import com.gtu.aiassistant.domain.materials.port.output.FindMaterialCollectionPort
 import com.gtu.aiassistant.domain.materials.port.output.FindMaterialDocumentPort
 import com.gtu.aiassistant.domain.materials.port.output.MaterialEmbeddingPort
+import com.gtu.aiassistant.domain.materials.port.output.MaterialOcrPort
 import com.gtu.aiassistant.domain.materials.port.output.MaterialObjectStoragePort
 import com.gtu.aiassistant.domain.materials.port.output.ReplaceMaterialDocumentChunksPort
 import com.gtu.aiassistant.domain.materials.port.output.SaveMaterialCollectionPort
@@ -107,11 +109,15 @@ import com.gtu.aiassistant.infrastructure.persistence.user.ExistsUserPortImpl
 import com.gtu.aiassistant.infrastructure.persistence.user.FindUserPortImpl
 import com.gtu.aiassistant.infrastructure.persistence.user.SaveUserPortImpl
 import com.gtu.aiassistant.infrastructure.persistence.user.UpdateUserPortImpl
+import com.gtu.aiassistant.infrastructure.ocr.TesseractMaterialOcrPortImpl
+import com.gtu.aiassistant.infrastructure.ocr.TesseractOcrConfig
 import com.gtu.aiassistant.infrastructure.security.Argon2HashPasswordPortImpl
 import com.gtu.aiassistant.infrastructure.security.Argon2VerifyPasswordPortImpl
 import com.gtu.aiassistant.infrastructure.security.IssueJwtPortImpl
 import com.gtu.aiassistant.infrastructure.security.JwtConfig
 import com.gtu.aiassistant.infrastructure.storage.LocalMaterialObjectStoragePort
+import com.gtu.aiassistant.infrastructure.storage.MinioMaterialObjectStorageConfig
+import com.gtu.aiassistant.infrastructure.storage.MinioMaterialObjectStorageFactory
 import com.gtu.aiassistant.infrastructure.knowledge.DisabledSaveKnowledgeIngestionRunPort
 import com.gtu.aiassistant.infrastructure.knowledge.DisabledSearchKnowledgePort
 import com.gtu.aiassistant.infrastructure.knowledge.DisabledUpsertKnowledgeDocumentPort
@@ -131,6 +137,7 @@ import io.ktor.server.netty.Netty
 import org.koin.core.context.startKoin
 import org.koin.dsl.module
 import java.nio.file.Path
+import java.time.Duration
 import java.time.ZoneId
 import kotlin.time.Duration.Companion.seconds
 
@@ -240,8 +247,41 @@ private fun appModule(
     single<HashPasswordPort> { Argon2HashPasswordPortImpl() }
     single<VerifyPasswordPort> { Argon2VerifyPasswordPortImpl() }
     single<IssueJwtPort> { IssueJwtPortImpl(get()) }
-    single<MaterialObjectStoragePort> { LocalMaterialObjectStoragePort(Path.of(runtimeConfig.localStorageDir)) }
-    single { MaterialTextExtractionService() }
+    single<MaterialObjectStoragePort> {
+        when (runtimeConfig.fileStorageMode) {
+            FileStorageMode.LOCAL -> LocalMaterialObjectStoragePort(Path.of(runtimeConfig.localStorageDir))
+            FileStorageMode.MINIO -> MinioMaterialObjectStorageFactory.create(
+                MinioMaterialObjectStorageConfig(
+                    endpoint = runtimeConfig.minioEndpoint ?: error("APP_MINIO_ENDPOINT must be set when APP_FILE_STORAGE_MODE=minio"),
+                    accessKey = runtimeConfig.minioAccessKey ?: error("APP_MINIO_ACCESS_KEY must be set when APP_FILE_STORAGE_MODE=minio"),
+                    secretKey = runtimeConfig.minioSecretKey ?: error("APP_MINIO_SECRET_KEY must be set when APP_FILE_STORAGE_MODE=minio"),
+                    bucket = runtimeConfig.minioBucket ?: error("APP_MINIO_BUCKET must be set when APP_FILE_STORAGE_MODE=minio"),
+                    region = runtimeConfig.minioRegion
+                )
+            )
+        }
+    }
+    single {
+        MaterialTextExtractionConfig(
+            ocrEnabled = runtimeConfig.materialOcrEnabled,
+            pdfMinTextLayerCharacters = runtimeConfig.materialOcrMinTextChars,
+            ocrRenderDpi = runtimeConfig.materialOcrRenderDpi
+        )
+    }
+    single {
+        val ocrPort: MaterialOcrPort? = if (runtimeConfig.materialOcrEnabled) {
+            TesseractMaterialOcrPortImpl(
+                TesseractOcrConfig(
+                    command = runtimeConfig.tesseractCommand,
+                    languages = runtimeConfig.tesseractLanguages,
+                    timeout = Duration.ofSeconds(runtimeConfig.tesseractTimeoutSeconds)
+                )
+            )
+        } else {
+            null
+        }
+        MaterialTextExtractionService(ocrPort, get())
+    }
     single { MaterialChunkBuilder() }
     single {
         MaterialIngestionSchedulerConfig(
@@ -382,10 +422,22 @@ private data class RuntimeConfig(
     val embeddingDimensions: Int,
     val webSearchMode: WebSearchMode,
     val webSearchMaxResults: Int,
+    val fileStorageMode: FileStorageMode,
     val localStorageDir: String,
+    val minioEndpoint: String?,
+    val minioAccessKey: String?,
+    val minioSecretKey: String?,
+    val minioBucket: String?,
+    val minioRegion: String?,
     val materialMaxFileSizeBytes: Long,
     val materialIngestionEnabled: Boolean,
-    val materialIngestionIntervalSeconds: Int
+    val materialIngestionIntervalSeconds: Int,
+    val materialOcrEnabled: Boolean,
+    val tesseractCommand: String,
+    val tesseractLanguages: String,
+    val tesseractTimeoutSeconds: Long,
+    val materialOcrMinTextChars: Int,
+    val materialOcrRenderDpi: Int
 ) {
     companion object {
         fun fromEnvironment(): RuntimeConfig {
@@ -433,12 +485,30 @@ private data class RuntimeConfig(
                 embeddingDimensions = (System.getenv("APP_EMBEDDING_DIMENSIONS") ?: "384").toInt(),
                 webSearchMode = WebSearchMode.from(System.getenv("APP_WEB_SEARCH_MODE")),
                 webSearchMaxResults = (System.getenv("APP_WEB_SEARCH_MAX_RESULTS") ?: "6").toInt(),
+                fileStorageMode = FileStorageMode.from(System.getenv("APP_FILE_STORAGE_MODE")),
                 localStorageDir = System.getenv("APP_LOCAL_STORAGE_DIR") ?: "./local-storage",
+                minioEndpoint = System.getenv("APP_MINIO_ENDPOINT")?.takeIf(String::isNotBlank),
+                minioAccessKey = System.getenv("APP_MINIO_ACCESS_KEY")?.takeIf(String::isNotBlank),
+                minioSecretKey = System.getenv("APP_MINIO_SECRET_KEY")?.takeIf(String::isNotBlank),
+                minioBucket = System.getenv("APP_MINIO_BUCKET")?.takeIf(String::isNotBlank),
+                minioRegion = System.getenv("APP_MINIO_REGION")?.takeIf(String::isNotBlank) ?: "us-east-1",
                 materialMaxFileSizeBytes = (System.getenv("APP_MATERIAL_MAX_FILE_SIZE_BYTES") ?: "52428800").toLong(),
                 materialIngestionEnabled = System.getenv("APP_MATERIAL_INGESTION_ENABLED").toBoolean(default = true),
                 materialIngestionIntervalSeconds = (System.getenv("APP_MATERIAL_INGESTION_INTERVAL_SECONDS") ?: "10")
                     .toInt()
-                    .coerceAtLeast(1)
+                    .coerceAtLeast(1),
+                materialOcrEnabled = System.getenv("APP_MATERIAL_OCR_ENABLED").toBoolean(default = false),
+                tesseractCommand = System.getenv("APP_TESSERACT_COMMAND")?.takeIf(String::isNotBlank)
+                    ?: TesseractOcrConfig.DEFAULT_COMMAND,
+                tesseractLanguages = System.getenv("APP_TESSERACT_LANGUAGES")?.takeIf(String::isNotBlank)
+                    ?: TesseractOcrConfig.DEFAULT_LANGUAGES,
+                tesseractTimeoutSeconds = (System.getenv("APP_TESSERACT_TIMEOUT_SECONDS") ?: "60").toLong().coerceAtLeast(1L),
+                materialOcrMinTextChars = (System.getenv("APP_MATERIAL_OCR_MIN_TEXT_CHARS") ?: MaterialTextExtractionConfig.DEFAULT_PDF_MIN_TEXT_LAYER_CHARACTERS.toString())
+                    .toInt()
+                    .coerceAtLeast(0),
+                materialOcrRenderDpi = (System.getenv("APP_MATERIAL_OCR_RENDER_DPI") ?: MaterialTextExtractionConfig.DEFAULT_OCR_RENDER_DPI.toString())
+                    .toInt()
+                    .coerceIn(72, 600)
             )
         }
     }
@@ -474,6 +544,19 @@ private enum class PersistenceMode {
             when (raw?.lowercase()) {
                 "postgres" -> POSTGRES
                 else -> MEMORY
+            }
+    }
+}
+
+private enum class FileStorageMode {
+    LOCAL,
+    MINIO;
+
+    companion object {
+        fun from(raw: String?): FileStorageMode =
+            when (raw?.lowercase()) {
+                "minio" -> MINIO
+                else -> LOCAL
             }
     }
 }

@@ -281,7 +281,16 @@ Expected result:
 
 ## Vertical Slice 10: Frontend Materials UI
 
-Status: `[ ]`
+Status: `[x]`
+
+Completed:
+
+- Added shared material response DTOs for typed frontend parsing.
+- Added frontend material API client methods for list, upload, and delete.
+- Added a sidebar Materials section with upload, list, status, size, upload date, ingestion errors, download, delete, and document selection.
+- Added a source mode selector near the chat composer.
+- Chat create/continue requests now pass selected source mode and selected document IDs.
+- Did not add collection UI/API, material search HTTP API, PDF/DOCX extraction, MinIO, or Slice 11+ features.
 
 Purpose: let users manage files and choose source mode from the UI.
 
@@ -301,7 +310,17 @@ Expected result:
 
 ## Vertical Slice 11: PDF And DOCX Extraction
 
-Status: `[ ]`
+Status: `[x]`
+
+Completed:
+
+- Added application-level PDFBox and Apache POI parser dependencies.
+- Extended `MaterialTextExtractionService` to extract PDF text page by page and attach `pageStart`/`pageEnd` metadata to extracted segments.
+- Extended chunk building so PDF page metadata is preserved on stored material chunks.
+- Extended `MaterialTextExtractionService` to extract DOCX paragraph text and maintain a basic heading path from Word `Heading1`-`Heading6` paragraph styles.
+- Updated ingestion eligibility so the worker processes `.pdf` and `.docx` documents through the existing `UPLOADED -> PROCESSING -> READY/FAILED` flow.
+- Added in-memory generated PDF/DOCX extraction tests, including page metadata preservation through chunk building.
+- Did not add OCR, MinIO, material search HTTP API, collection API, frontend changes, or Slice 12+ features.
 
 Purpose: support the remaining v1 file formats.
 
@@ -320,7 +339,17 @@ Expected result:
 
 ## Vertical Slice 12: MinIO Storage
 
-Status: `[ ]`
+Status: `[x]`
+
+Completed:
+
+- Added MinIO Java SDK dependency to `backend/infrastructure`.
+- Added file storage config with local default and MinIO mode selected by `APP_FILE_STORAGE_MODE=minio`.
+- Implemented `MinioMaterialObjectStoragePortImpl` for owner-scoped original file save/read/delete through the existing `MaterialObjectStoragePort` abstraction.
+- Added startup bucket ensure through the MinIO storage factory; startup fails with a clear error if bucket validation/creation fails.
+- Added MinIO service, volume, healthcheck, and backend MinIO env wiring to `docker-compose.yml`.
+- Kept local filesystem storage as the default fallback/dev mode.
+- Did not add Slice 13+, OCR, material search HTTP API, collection API, frontend changes, or parser dependency movement.
 
 Purpose: store original files in MinIO when configured.
 
@@ -345,7 +374,18 @@ Expected result:
 
 ## Vertical Slice 13: OCR For Scanned PDFs
 
-Status: `[ ]`
+Status: `[x]`
+
+Completed:
+
+- Added OCR port abstraction and Tesseract-based infrastructure implementation using `eng+rus` by default.
+- Added OCR runtime config: `APP_MATERIAL_OCR_ENABLED`, `APP_TESSERACT_COMMAND`, `APP_TESSERACT_LANGUAGES`, `APP_TESSERACT_TIMEOUT_SECONDS`, `APP_MATERIAL_OCR_MIN_TEXT_CHARS`, and `APP_MATERIAL_OCR_RENDER_DPI`.
+- Extended PDF extraction to detect weak/missing text layers and render pages to PNG for OCR when enabled.
+- Stored OCR usage/confidence/error metadata on material documents after ingestion and exposed it through materials API/UI.
+- Installed Tesseract and English/Russian language packs in the backend runtime image.
+- Enabled OCR in `docker-compose.yml` with `eng+rus` languages for the backend container.
+- Added tests covering PDF text extraction, OCR fallback for scanned/blank PDFs, DOCX extraction, and page metadata preservation.
+- OCR runs in the existing asynchronous ingestion worker, so upload requests still only persist the original file and document record.
 
 Purpose: support Russian and English scanned PDFs after the basic text pipeline works.
 

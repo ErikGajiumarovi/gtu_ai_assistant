@@ -128,7 +128,8 @@ class MaterialIngestionWorker(
 
         val readyDocument = persistedProcessingDocument.withIngestionState(
             status = MaterialIngestionStatus.READY,
-            error = null
+            error = null,
+            ocrMetadata = extractionResult.ocrMetadata?.toStorageString()
         ).fold(
             ifLeft = { return markFailed(persistedProcessingDocument, "Invalid material document state") },
             ifRight = { it }
@@ -143,7 +144,8 @@ class MaterialIngestionWorker(
     private suspend fun markFailed(document: MaterialDocument, message: String): Boolean {
         val failedDocument = document.withIngestionState(
             status = MaterialIngestionStatus.FAILED,
-            error = message.take(MAX_ERROR_LENGTH)
+            error = message.take(MAX_ERROR_LENGTH),
+            ocrMetadata = null
         ).fold(
             ifLeft = { return false },
             ifRight = { it }
@@ -175,7 +177,8 @@ sealed interface MaterialIngestionWorkerError {
 
 private fun MaterialDocument.withIngestionState(
     status: MaterialIngestionStatus,
-    error: String?
+    error: String?,
+    ocrMetadata: String? = this.ocrMetadata
 ): Either<DomainError, MaterialDocument> =
     MaterialDocument.create(
         id = id,
@@ -189,6 +192,7 @@ private fun MaterialDocument.withIngestionState(
         storageObjectKey = storageObjectKey,
         ingestionStatus = status,
         ingestionError = error,
+        ocrMetadata = ocrMetadata,
         createdAt = createdAt,
         updatedAt = Instant.now()
     )

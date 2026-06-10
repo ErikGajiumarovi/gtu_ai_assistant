@@ -31,6 +31,7 @@ class SaveMaterialDocumentPortImpl(
                     it[MaterialDocumentRecords.storageObjectKey] = document.storageObjectKey
                     it[MaterialDocumentRecords.ingestionStatus] = document.ingestionStatus.name
                     it[MaterialDocumentRecords.ingestionError] = document.ingestionError
+                    it[MaterialDocumentRecords.ocrMetadata] = document.ocrMetadata
                     it[MaterialDocumentRecords.createdAt] = document.createdAt
                     it[MaterialDocumentRecords.updatedAt] = document.updatedAt
                 }
@@ -48,6 +49,7 @@ class SaveMaterialDocumentPortImpl(
                     it[MaterialDocumentRecords.storageObjectKey] = document.storageObjectKey
                     it[MaterialDocumentRecords.ingestionStatus] = document.ingestionStatus.name
                     it[MaterialDocumentRecords.ingestionError] = document.ingestionError
+                    it[MaterialDocumentRecords.ocrMetadata] = document.ocrMetadata
                     it[MaterialDocumentRecords.createdAt] = document.createdAt
                     it[MaterialDocumentRecords.updatedAt] = document.updatedAt
                 }

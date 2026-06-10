@@ -11,6 +11,8 @@ dependencies {
 
     implementation(libs.arrow.core)
     implementation(libs.coroutines.core)
+    implementation(libs.pdfbox)
+    implementation(libs.poi.ooxml)
 
     testImplementation(kotlin("test"))
 }

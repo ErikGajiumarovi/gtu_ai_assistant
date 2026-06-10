@@ -28,6 +28,7 @@ internal object MaterialDocumentRecords {
     val storageObjectKey = table.storageObjectKey
     val ingestionStatus = table.ingestionStatus
     val ingestionError = table.ingestionError
+    val ocrMetadata = table.ocrMetadata
     val createdAt = table.createdAt
     val updatedAt = table.updatedAt
 }

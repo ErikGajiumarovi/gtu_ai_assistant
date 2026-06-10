@@ -16,6 +16,7 @@ object MaterialDocumentsTable : Table(name = "material_documents") {
     val storageObjectKey = text("storage_object_key")
     val ingestionStatus = varchar("ingestion_status", length = 32)
     val ingestionError = text("ingestion_error").nullable()
+    val ocrMetadata = text("ocr_metadata").nullable()
     val createdAt = timestamp("created_at")
     val updatedAt = timestamp("updated_at")
 

@@ -111,6 +111,33 @@ class ApiClient(private val baseUrl: String = "") {
     suspend fun deleteChat(chatId: String): DeleteChatResponse =
         request("/api/chats/$chatId", HttpMethod.Delete)
 
+    suspend fun listMaterials(): List<MaterialResponse> {
+        val response: ListMaterialsResponse = request("/api/materials", HttpMethod.Get)
+        return response.materials
+    }
+
+    suspend fun uploadMaterial(file: Any): MaterialResponse {
+        val formData = js("new FormData()")
+        formData.append("file", file)
+
+        val headers = Headers().also {
+            authToken?.let { token -> it.set("Authorization", "Bearer $token") }
+        }
+        val response = window.fetch(
+            "$baseUrl/api/materials",
+            RequestInit(method = "POST", body = formData, headers = headers)
+        ).await()
+
+        if (!response.ok) {
+            throw toApiClientError(response, "upload_error")
+        }
+
+        return json.decodeFromString(response.text().await())
+    }
+
+    suspend fun deleteMaterial(materialId: String): DeleteMaterialResponse =
+        request("/api/materials/$materialId", HttpMethod.Delete)
+
     suspend fun createChatWithAgentStream(
         payload: CreateChatWithAgentRequest,
         onToken: (String) -> Unit,
@@ -225,5 +252,21 @@ class ApiClient(private val baseUrl: String = "") {
         } catch (e: Exception) {
             onError(ApiClientError("Parse error: ${e.message}", "parse_error", 500))
         }
+    }
+
+    private suspend fun toApiClientError(response: Any, defaultCode: String): ApiClientError {
+        val dynamicResponse = response.unsafeCast<dynamic>()
+        val status = dynamicResponse.status.toString().toIntOrNull() ?: 500
+        val text = dynamicResponse.text().await().unsafeCast<String>()
+        val errorBody = try {
+            json.decodeFromString<ApiErrorResponse>(text)
+        } catch (_: Exception) {
+            null
+        }
+        return ApiClientError(
+            message = errorBody?.message ?: text.ifBlank { "HTTP $status" },
+            code = errorBody?.code ?: defaultCode,
+            status = status
+        )
     }
 }

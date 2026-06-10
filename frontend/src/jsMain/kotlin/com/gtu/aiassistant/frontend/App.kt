@@ -17,6 +17,7 @@ import org.w3c.fetch.Headers
 import org.w3c.fetch.RequestInit
 import org.w3c.dom.HTMLElement
 import org.w3c.dom.HTMLInputElement
+import org.w3c.dom.HTMLSelectElement
 import org.w3c.dom.HTMLTextAreaElement
 
 private const val SESSION_KEY = "gtu-ai-assistant.session"
@@ -47,11 +48,16 @@ fun App() {
     var registrationDraft by remember { mutableStateOf(RegistrationDraft("", "", "", "")) }
     var loginDraft by remember { mutableStateOf(LoginDraft("", "")) }
     var chats by remember { mutableStateOf<List<ChatResponse>>(emptyList()) }
+    var materials by remember { mutableStateOf<List<MaterialResponse>>(emptyList()) }
     var selectedChatId by remember { mutableStateOf("") }
     var chatSearch by remember { mutableStateOf("") }
     var isRegistering by remember { mutableStateOf(false) }
     var isLoggingIn by remember { mutableStateOf(false) }
     var isRefreshingChats by remember { mutableStateOf(false) }
+    var isLoadingMaterials by remember { mutableStateOf(false) }
+    var isUploadingMaterial by remember { mutableStateOf(false) }
+    var selectedSourceMode by remember { mutableStateOf(AgentSourceMode.GTU_AND_MY_MATERIALS) }
+    var selectedDocumentIds by remember { mutableStateOf<Set<String>>(emptySet()) }
 
     var isStreaming by remember { mutableStateOf(false) }
     var streamingText by remember { mutableStateOf("") }
@@ -81,8 +87,10 @@ fun App() {
     LaunchedEffect(session) {
         if (session != null) {
             refreshChats(apiClient, { chats = sortChats(it) }, { notice = it }, { isRefreshingChats = it })
+            refreshMaterials(apiClient, { materials = it }, { notice = it }, { isLoadingMaterials = it })
         } else {
             chats = emptyList(); selectedChatId = ""; pendingUserText = ""; streamingText = ""
+            materials = emptyList(); selectedDocumentIds = emptySet(); selectedSourceMode = AgentSourceMode.GTU_AND_MY_MATERIALS
         }
     }
 
@@ -120,17 +128,51 @@ fun App() {
             Div(attrs = { style { display(DisplayStyle.Grid); property("grid-template-columns", "260px 1fr"); property("height", "100vh") } }) {
                 Sidebar(
                     chats = filteredChats, selectedChatId = selectedChatId, session = session!!,
+                    materials = materials, selectedDocumentIds = selectedDocumentIds,
                     isRefreshingChats = isRefreshingChats, isStreaming = isStreaming,
+                    isLoadingMaterials = isLoadingMaterials, isUploadingMaterial = isUploadingMaterial,
                     onSelectChat = { selectedChatId = it; pendingUserText = ""; streamingText = "" },
                     onNewChat = { selectedChatId = ""; pendingUserText = ""; streamingText = ""; chatSearch = ""; notice = null },
                     onLogout = { session = null },
                     onSearchChange = { chatSearch = it },
-                    onRefresh = { scope.launch { refreshChats(apiClient, { chats = sortChats(it) }, { notice = it }, { isRefreshingChats = it }) } }
+                    onRefresh = { scope.launch { refreshChats(apiClient, { chats = sortChats(it) }, { notice = it }, { isRefreshingChats = it }) } },
+                    onRefreshMaterials = { scope.launch { refreshMaterials(apiClient, { materials = it }, { notice = it }, { isLoadingMaterials = it }) } },
+                    onUploadMaterial = { file ->
+                        scope.launch {
+                            isUploadingMaterial = true
+                            try {
+                                apiClient.uploadMaterial(file)
+                                refreshMaterials(apiClient, { materials = it }, { notice = it }, { isLoadingMaterials = it })
+                            } catch (e: Exception) { showError("Upload failed", e) } finally { isUploadingMaterial = false }
+                        }
+                    },
+                    onDownloadMaterial = { material ->
+                        scope.launch {
+                            try {
+                                openAuthenticatedDownload("/api/materials/${material.id}/download", session!!.jwt)
+                            } catch (e: Exception) { showError("Download failed", e) }
+                        }
+                    },
+                    onDeleteMaterial = { material ->
+                        scope.launch {
+                            try {
+                                apiClient.deleteMaterial(material.id)
+                                selectedDocumentIds = selectedDocumentIds - material.id
+                                refreshMaterials(apiClient, { materials = it }, { notice = it }, { isLoadingMaterials = it })
+                            } catch (e: Exception) { showError("Delete failed", e) }
+                        }
+                    },
+                    onToggleMaterial = { materialId, checked ->
+                        selectedDocumentIds = if (checked) selectedDocumentIds + materialId else selectedDocumentIds - materialId
+                    }
                 )
                 ChatScreen(
                     notice = notice, selectedChat = selectedChat, isStreaming = isStreaming,
                     streamingText = streamingText, pendingUserText = pendingUserText,
+                    selectedSourceMode = selectedSourceMode,
+                    selectedDocumentCount = selectedDocumentIds.size,
                     onDismissNotice = { notice = null },
+                    onSourceModeChange = { selectedSourceMode = it },
                     onOpenMaterialCitation = { url ->
                         scope.launch {
                             try {
@@ -147,7 +189,11 @@ fun App() {
 
                             if (selectedChat == null) {
                                 apiClient.createChatWithAgentStream(
-                                    CreateChatWithAgentRequest(trimmed),
+                                    CreateChatWithAgentRequest(
+                                        originalText = trimmed,
+                                        sourceMode = selectedSourceMode,
+                                        documentIds = selectedDocumentIds.toList()
+                                    ),
                                     onToken = { token -> streamingText += token },
                                     onDone = { chat ->
                                         chats = sortChats(listOf(chat) + chats.filter { it.id != chat.id })
@@ -161,7 +207,11 @@ fun App() {
                                 )
                             } else {
                                 apiClient.continueChatWithAgentStream(
-                                    selectedChat.id, ContinueChatWithAgentRequest(trimmed),
+                                    selectedChat.id, ContinueChatWithAgentRequest(
+                                        originalText = trimmed,
+                                        sourceMode = selectedSourceMode,
+                                        documentIds = selectedDocumentIds.toList()
+                                    ),
                                     onToken = { token -> streamingText += token },
                                     onDone = { chat ->
                                         chats = sortChats(listOf(chat) + chats.filter { it.id != chat.id })
@@ -260,7 +310,9 @@ private fun AuthPage(
 private fun ChatScreen(
     notice: Notice?, selectedChat: ChatResponse?,
     isStreaming: Boolean, streamingText: String, pendingUserText: String,
+    selectedSourceMode: AgentSourceMode, selectedDocumentCount: Int,
     onDismissNotice: () -> Unit,
+    onSourceModeChange: (AgentSourceMode) -> Unit,
     onOpenMaterialCitation: (String) -> Unit,
     onSubmit: (String) -> Unit
 ) {
@@ -318,6 +370,13 @@ private fun ChatScreen(
 
         Div(attrs = { style { property("border-top", "1px solid #e5e5e5"); property("padding", "16px 24px"); backgroundColor(Color("white")) } }) {
             Form(attrs = { onSubmit { it.preventDefault(); onSubmit(composerText); composerText = "" }; style { property("max-width", "768px"); property("margin", "0 auto") } }) {
+                SourceModeSelector(
+                    selectedSourceMode = selectedSourceMode,
+                    selectedDocumentCount = selectedDocumentCount,
+                    onSourceModeChange = onSourceModeChange,
+                    disabled = isStreaming
+                )
+                Spacer(10)
                 Div(attrs = { style { display(DisplayStyle.Flex); gap(8.px); alignItems(AlignItems.FlexEnd) } }) {
                     val textareaRef = remember { mutableStateOf<HTMLTextAreaElement?>(null) }
                     LaunchedEffect(composerText) {
@@ -421,11 +480,53 @@ private fun MessageBubble(
 }
 
 @Composable
+private fun SourceModeSelector(
+    selectedSourceMode: AgentSourceMode,
+    selectedDocumentCount: Int,
+    onSourceModeChange: (AgentSourceMode) -> Unit,
+    disabled: Boolean
+) {
+    Div(attrs = { style { display(DisplayStyle.Flex); flexDirection(FlexDirection.Column); gap(6.px) } }) {
+        Div(attrs = { style { display(DisplayStyle.Flex); alignItems(AlignItems.Center); gap(8.px); property("flex-wrap", "wrap") } }) {
+            Span(attrs = { style { fontSize(12.px); fontWeight("600"); color(Color("#666")) } }) { Text("Sources") }
+            Select(attrs = {
+                if (disabled) disabled()
+                attr("value", selectedSourceMode.name)
+                onChange { event -> onSourceModeChange(AgentSourceMode.valueOf((event.target as HTMLSelectElement).value)) }
+                style {
+                    fontSize(12.px); padding(6.px, 8.px); property("border-radius", "8px")
+                    border(1.px, LineStyle.Solid, Color("#e5e5e5")); backgroundColor(Color("#fafafa")); color(Color("#333"))
+                }
+            }) {
+                sourceModeOptions.forEach { (mode, label) ->
+                    Option(value = mode.name) { Text(label) }
+                }
+            }
+            Span(attrs = { style { fontSize(12.px); color(Color("#888")) } }) {
+                Text(if (selectedDocumentCount == 0) "All ready materials" else "$selectedDocumentCount selected file(s)")
+            }
+        }
+        if (selectedDocumentCount == 0 && selectedSourceMode.usesMaterials()) {
+            Span(attrs = { style { fontSize(11.px); color(Color("#888")) } }) {
+                Text("No files selected: assistant will search all READY materials.")
+            }
+        }
+    }
+}
+
+@Composable
 private fun Sidebar(
     chats: List<ChatResponse>, selectedChatId: String, session: SessionState,
+    materials: List<MaterialResponse>, selectedDocumentIds: Set<String>,
     isRefreshingChats: Boolean, isStreaming: Boolean,
+    isLoadingMaterials: Boolean, isUploadingMaterial: Boolean,
     onSelectChat: (String) -> Unit, onNewChat: () -> Unit, onLogout: () -> Unit,
-    onSearchChange: (String) -> Unit, onRefresh: () -> Unit
+    onSearchChange: (String) -> Unit, onRefresh: () -> Unit,
+    onRefreshMaterials: () -> Unit,
+    onUploadMaterial: (Any) -> Unit,
+    onDownloadMaterial: (MaterialResponse) -> Unit,
+    onDeleteMaterial: (MaterialResponse) -> Unit,
+    onToggleMaterial: (String, Boolean) -> Unit
 ) {
     Aside(attrs = { style { backgroundColor(Color("#171717")); color(Color("white")); display(DisplayStyle.Flex); flexDirection(FlexDirection.Column); property("height", "100vh") } }) {
         Div(attrs = { style { padding(16.px); flexGrow(1.0); display(DisplayStyle.Flex); flexDirection(FlexDirection.Column) } }) {
@@ -463,6 +564,18 @@ private fun Sidebar(
                 }
             }
 
+            MaterialsPanel(
+                materials = materials,
+                selectedDocumentIds = selectedDocumentIds,
+                isLoading = isLoadingMaterials,
+                isUploading = isUploadingMaterial,
+                onRefresh = onRefreshMaterials,
+                onUpload = onUploadMaterial,
+                onDownload = onDownloadMaterial,
+                onDelete = onDeleteMaterial,
+                onToggle = onToggleMaterial
+            )
+
             Div(attrs = { style { property("border-top", "1px solid rgba(255,255,255,0.1)"); paddingTop(12.px) } }) {
                 Div(attrs = { style { display(DisplayStyle.Flex); alignItems(AlignItems.Center); gap(10.px); marginBottom(12.px) } }) {
                     Div(attrs = { style { width(32.px); height(32.px); property("border-radius", "6px"); backgroundColor(Color("#333")); display(DisplayStyle.Flex); alignItems(AlignItems.Center); justifyContent(JustifyContent.Center); fontSize(14.px); fontWeight("600") } }) { Text(session.email.take(2).uppercase()) }
@@ -472,6 +585,115 @@ private fun Sidebar(
                     onClick { onLogout() }
                     style { property("width", "100%"); padding(8.px); fontSize(13.px); property("border-radius", "6px"); border(0.px); backgroundColor(Color("rgba(255,255,255,0.1)")); color(Color("rgba(255,255,255,0.6)")); cursor("pointer") }
                 }) { Text("Log out") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MaterialsPanel(
+    materials: List<MaterialResponse>,
+    selectedDocumentIds: Set<String>,
+    isLoading: Boolean,
+    isUploading: Boolean,
+    onRefresh: () -> Unit,
+    onUpload: (Any) -> Unit,
+    onDownload: (MaterialResponse) -> Unit,
+    onDelete: (MaterialResponse) -> Unit,
+    onToggle: (String, Boolean) -> Unit
+) {
+    Div(attrs = { style { property("border-top", "1px solid rgba(255,255,255,0.1)"); paddingTop(12.px); marginTop(12.px); marginBottom(12.px) } }) {
+        Div(attrs = { style { display(DisplayStyle.Flex); alignItems(AlignItems.Center); justifyContent(JustifyContent.SpaceBetween); marginBottom(8.px) } }) {
+            Span(attrs = { style { fontSize(13.px); fontWeight("600"); color(Color("rgba(255,255,255,0.85)")) } }) { Text("Materials") }
+            Button(attrs = {
+                attr("type", "button")
+                if (isLoading) disabled()
+                onClick { onRefresh() }
+                style { smallSidebarButtonStyle() }
+            }) { Text(if (isLoading) "..." else "Refresh") }
+        }
+        Label(attrs = {
+            style {
+                display(DisplayStyle.Block); padding(8.px); property("border-radius", "8px")
+                border(1.px, LineStyle.Solid, Color("rgba(255,255,255,0.15)")); textAlign("center")
+                fontSize(12.px); color(Color("rgba(255,255,255,0.75)")); cursor(if (isUploading) "not-allowed" else "pointer")
+                backgroundColor(Color("rgba(255,255,255,0.06)")); property("opacity", if (isUploading) "0.6" else "1")
+            }
+        }) {
+            Text(if (isUploading) "Uploading..." else "Upload .md, .txt, .pdf, .docx")
+            Input(InputType.File, attrs = {
+                if (isUploading) disabled()
+                attr("accept", ".md,.txt,.pdf,.docx")
+                onChange { event ->
+                    val input = event.target as HTMLInputElement
+                    val file = input.files?.item(0)
+                    if (file != null) {
+                        onUpload(file)
+                        input.value = ""
+                    }
+                }
+                style { display(DisplayStyle.None) }
+            })
+        }
+        Spacer(8)
+        Div(attrs = { style { property("max-height", "240px"); property("overflow-y", "auto") } }) {
+            if (materials.isEmpty()) {
+                P(attrs = { style { fontSize(12.px); color(Color("rgba(255,255,255,0.4)")); margin(0.px); padding(6.px, 0.px) } }) {
+                    Text(if (isLoading) "Loading materials..." else "No files uploaded")
+                }
+            } else {
+                for (material in materials) {
+                    MaterialRow(
+                        material = material,
+                        selected = material.id in selectedDocumentIds,
+                        onToggle = onToggle,
+                        onDownload = onDownload,
+                        onDelete = onDelete
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MaterialRow(
+    material: MaterialResponse,
+    selected: Boolean,
+    onToggle: (String, Boolean) -> Unit,
+    onDownload: (MaterialResponse) -> Unit,
+    onDelete: (MaterialResponse) -> Unit
+) {
+    Div(attrs = { style { padding(8.px, 0.px); property("border-top", "1px solid rgba(255,255,255,0.08)") } }) {
+        Div(attrs = { style { display(DisplayStyle.Flex); gap(8.px); alignItems(AlignItems.FlexStart) } }) {
+            Input(InputType.Checkbox, attrs = {
+                checked(selected)
+                onChange { event -> onToggle(material.id, (event.target as HTMLInputElement).checked) }
+                style { marginTop(2.px) }
+            })
+            Div(attrs = { style { flexGrow(1.0); property("min-width", "0") } }) {
+                Div(attrs = { style { fontSize(12.px); fontWeight("600"); color(Color("rgba(255,255,255,0.82)")); whiteSpace("nowrap"); property("overflow", "hidden"); property("text-overflow", "ellipsis") } }) {
+                    Text(material.originalFileName.ifBlank { material.title })
+                }
+                Div(attrs = { style { fontSize(11.px); color(Color("rgba(255,255,255,0.45)")); marginTop(2.px) } }) {
+                    Text("${material.ingestionStatus} · ${formatBytes(material.sizeBytes)} · ${formatShortDate(material.createdAt)}")
+                }
+                val ingestionError = material.ingestionError
+                if (!ingestionError.isNullOrBlank()) {
+                    Div(attrs = { style { fontSize(11.px); color(Color("#fca5a5")); marginTop(3.px); property("word-break", "break-word") } }) {
+                        Text(ingestionError)
+                    }
+                }
+                val ocrMetadata = material.ocrMetadata
+                if (!ocrMetadata.isNullOrBlank()) {
+                    Div(attrs = { style { fontSize(11.px); color(Color("rgba(255,255,255,0.45)")); marginTop(3.px); property("word-break", "break-word") } }) {
+                        Text("OCR: $ocrMetadata")
+                    }
+                }
+                Div(attrs = { style { display(DisplayStyle.Flex); gap(6.px); marginTop(6.px) } }) {
+                    Button(attrs = { attr("type", "button"); onClick { onDownload(material) }; style { smallSidebarButtonStyle() } }) { Text("Download") }
+                    Button(attrs = { attr("type", "button"); onClick { onDelete(material) }; style { smallSidebarButtonStyle() } }) { Text("Delete") }
+                }
             }
         }
     }
@@ -510,6 +732,39 @@ private fun NoticeBanner(notice: Notice) {
 private fun Spacer(height: Int) {
     Div(attrs = { style { height(height.px) } })
 }
+
+private val sourceModeOptions = listOf(
+    AgentSourceMode.GTU_ONLY to "GTU only",
+    AgentSourceMode.MY_MATERIALS_ONLY to "My materials only",
+    AgentSourceMode.GTU_AND_MY_MATERIALS to "GTU + my materials",
+    AgentSourceMode.GTU_MY_MATERIALS_AND_WEB to "GTU + my materials + web"
+)
+
+private fun AgentSourceMode.usesMaterials(): Boolean =
+    this != AgentSourceMode.GTU_ONLY
+
+private fun StyleScope.smallSidebarButtonStyle() {
+    padding(4.px, 7.px)
+    fontSize(11.px)
+    property("border-radius", "6px")
+    border(0.px)
+    backgroundColor(Color("rgba(255,255,255,0.1)"))
+    color(Color("rgba(255,255,255,0.7)"))
+    cursor("pointer")
+}
+
+private fun formatBytes(value: Long): String =
+    when {
+        value >= 1024L * 1024L -> "${(value / (1024.0 * 1024.0)).roundOne()} MB"
+        value >= 1024L -> "${(value / 1024.0).roundOne()} KB"
+        else -> "$value B"
+    }
+
+private fun Double.roundOne(): String =
+    (kotlin.math.round(this * 10.0) / 10.0).toString()
+
+private fun formatShortDate(value: String): String =
+    value.substringBefore("T").ifBlank { value }
 
 private fun sortChats(chats: List<ChatResponse>): List<ChatResponse> =
     chats.sortedByDescending { it.updatedAt }
@@ -601,6 +856,27 @@ private suspend fun refreshChats(
         } else {
             val msg = if (error is ApiClientError) "${error.code}: ${error.message}" else error.message ?: "Unknown error"
             onNotice(Notice("error", "Unable to load chats", msg))
+        }
+    } finally {
+        onLoading(false)
+    }
+}
+
+private suspend fun refreshMaterials(
+    apiClient: ApiClient,
+    onMaterials: (List<MaterialResponse>) -> Unit,
+    onNotice: (Notice) -> Unit,
+    onLoading: (Boolean) -> Unit
+) {
+    onLoading(true)
+    try {
+        onMaterials(apiClient.listMaterials().sortedByDescending { it.createdAt })
+    } catch (error: Exception) {
+        if (error is ApiClientError && error.status == 401) {
+            onNotice(Notice("error", "Session expired", "Sign in again to continue."))
+        } else {
+            val msg = if (error is ApiClientError) "${error.code}: ${error.message}" else error.message ?: "Unknown error"
+            onNotice(Notice("error", "Unable to load materials", msg))
         }
     } finally {
         onLoading(false)

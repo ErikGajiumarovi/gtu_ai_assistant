@@ -27,6 +27,7 @@ object PersistenceSchema {
             exec("ALTER TABLE chat_message_citations ADD COLUMN IF NOT EXISTS document_id varchar(36)")
             exec("ALTER TABLE chat_message_citations ADD COLUMN IF NOT EXISTS page_start integer")
             exec("ALTER TABLE chat_message_citations ADD COLUMN IF NOT EXISTS page_end integer")
+            exec("ALTER TABLE material_documents ADD COLUMN IF NOT EXISTS ocr_metadata text")
 
             exec(
                 """

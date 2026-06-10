@@ -12,6 +12,9 @@ serialization = "1.9.0"
 argon2 = "2.12"
 java-jwt = "4.5.0"
 jsoup = "1.18.3"
+pdfbox = "3.0.5"
+poi = "5.4.1"
+minio = "8.5.17"
 
 [libraries]
 arrow-core = { module = "io.arrow-kt:arrow-core", version.ref = "arrow" }
@@ -37,6 +40,9 @@ kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serializa
 argon2-jvm = { module = "de.mkammerer:argon2-jvm", version.ref = "argon2" }
 java-jwt = { module = "com.auth0:java-jwt", version.ref = "java-jwt" }
 jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
+pdfbox = { module = "org.apache.pdfbox:pdfbox", version.ref = "pdfbox" }
+poi-ooxml = { module = "org.apache.poi:poi-ooxml", version.ref = "poi" }
+minio = { module = "io.minio:minio", version.ref = "minio" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

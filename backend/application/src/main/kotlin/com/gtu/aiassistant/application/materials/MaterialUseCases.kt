@@ -86,6 +86,7 @@ class UploadMaterialUseCaseImpl(
                     storageObjectKey = storageResult.key,
                     ingestionStatus = MaterialIngestionStatus.UPLOADED,
                     ingestionError = null,
+                    ocrMetadata = null,
                     createdAt = now,
                     updatedAt = now
                 )
@@ -175,11 +176,13 @@ private fun isSupported(fileName: String, contentType: String): Boolean {
 }
 
 internal fun requiresTextExtraction(fileName: String): Boolean =
-    fileName.substringAfterLast('.', missingDelimiterValue = "").lowercase(Locale.ROOT) in setOf("md", "txt")
+    fileName.substringAfterLast('.', missingDelimiterValue = "").lowercase(Locale.ROOT) in setOf("md", "txt", "pdf", "docx")
 
 internal fun MaterialTextExtractionError.toIngestionErrorMessage(): String =
     when (this) {
         MaterialTextExtractionError.EmptyText -> "Text extraction failed: extracted text is empty"
+        MaterialTextExtractionError.ExtractionFailed -> "Text extraction failed: parser could not read the file"
         MaterialTextExtractionError.InvalidUtf8 -> "Text extraction failed: file is not valid UTF-8"
+        MaterialTextExtractionError.OcrFailed -> "Text extraction failed: OCR could not read the scanned PDF"
         MaterialTextExtractionError.UnsupportedFormat -> "Text extraction failed: unsupported text format"
     }

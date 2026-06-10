@@ -2,6 +2,8 @@ package com.gtu.aiassistant.infrastructure.ai
 
 import com.gtu.aiassistant.domain.chat.model.Message
 import com.gtu.aiassistant.domain.chat.model.MessageSenderType
+import com.gtu.aiassistant.domain.chat.port.output.GenerateMessageCommand
+import com.gtu.aiassistant.domain.user.model.UserId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -24,6 +26,8 @@ class GenerateMessagePortImplIntegrationTest {
     private fun runIntegrationTest(
         config: AiConfig
     ) {
+        if (System.getenv("RUN_AI_INTEGRATION_TESTS") != "true") return
+
         val port = GenerateMessagePortImpl.create(config)
         val baseTime = Instant.parse("2026-05-02T00:00:00Z")
 
@@ -49,7 +53,12 @@ class GenerateMessagePortImplIntegrationTest {
         )
 
         val result = kotlinx.coroutines.runBlocking {
-            port(messages)
+            port(
+                GenerateMessageCommand(
+                    messages = messages,
+                    userId = UserId.fromTrusted(UUID.fromString("00000000-0000-0000-0000-000000000010"))
+                )
+            )
         }
 
         result.fold(

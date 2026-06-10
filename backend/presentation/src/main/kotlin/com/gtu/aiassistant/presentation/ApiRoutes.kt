@@ -35,7 +35,6 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.time.Instant
 import java.util.UUID
@@ -474,32 +473,6 @@ internal fun Application.configureRoutes(
     }
 }
 
-@Serializable
-private data class MaterialResponse(
-    val id: String,
-    val version: Long,
-    val ownerUserId: String,
-    val collectionId: String?,
-    val title: String,
-    val originalFileName: String,
-    val contentType: String,
-    val sizeBytes: Long,
-    val ingestionStatus: String,
-    val ingestionError: String?,
-    val createdAt: String,
-    val updatedAt: String
-)
-
-@Serializable
-private data class ListMaterialsResponse(
-    val materials: List<MaterialResponse>
-)
-
-@Serializable
-private data class DeleteMaterialResponse(
-    val deleted: Boolean
-)
-
 private data class ReceivedMaterialUpload(
     val originalFileName: String,
     val contentType: String,
@@ -648,6 +621,7 @@ private fun MaterialDocument.toMaterialResponse(): MaterialResponse =
         sizeBytes = sizeBytes,
         ingestionStatus = ingestionStatus.name,
         ingestionError = ingestionError,
+        ocrMetadata = ocrMetadata,
         createdAt = createdAt.toString(),
         updatedAt = updatedAt.toString()
     )

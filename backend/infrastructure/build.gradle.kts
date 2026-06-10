@@ -22,6 +22,7 @@ dependencies {
     implementation(libs.jsoup)
     implementation(libs.argon2.jvm)
     implementation(libs.java.jwt)
+    implementation(libs.minio)
 
     testImplementation(kotlin("test"))
 }

@@ -17,6 +17,25 @@ services:
       retries: 10
       start_period: 10s
 
+  minio:
+    image: minio/minio:latest
+    container_name: gtu-ai-assistant-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   backend:
     build:
       context: .
@@ -24,6 +43,8 @@ services:
     container_name: gtu-ai-assistant-backend
     depends_on:
       postgres:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     environment:
       APP_HOST: 0.0.0.0
@@ -40,6 +61,14 @@ services:
       APP_DB_JDBC_URL: jdbc:postgresql://postgres:5432/gtu_ai_assistant
       APP_DB_USERNAME: postgres
       APP_DB_PASSWORD: postgres
+      APP_FILE_STORAGE_MODE: minio
+      APP_MINIO_ENDPOINT: http://minio:9000
+      APP_MINIO_ACCESS_KEY: minioadmin
+      APP_MINIO_SECRET_KEY: minioadmin
+      APP_MINIO_BUCKET: gtu-ai-assistant-materials
+      APP_MINIO_REGION: us-east-1
+      APP_MATERIAL_OCR_ENABLED: "true"
+      APP_TESSERACT_LANGUAGES: eng+rus
     ports:
       - "8080:8080"
 
@@ -55,3 +84,4 @@ services:
 
 volumes:
   postgres_data:
+  minio_data:
