@@ -112,12 +112,37 @@ data class MaterialResponse(
 )
 
 @Serializable
+data class MaterialCollectionResponse(
+    val id: String,
+    val version: Long,
+    val ownerUserId: String,
+    val name: String,
+    val createdAt: String,
+    val updatedAt: String
+)
+
+@Serializable
+data class CreateMaterialCollectionRequest(
+    val name: String
+)
+
+@Serializable
 data class ListMaterialsResponse(
     val materials: List<MaterialResponse>
 )
 
 @Serializable
+data class ListMaterialCollectionsResponse(
+    val collections: List<MaterialCollectionResponse>
+)
+
+@Serializable
 data class DeleteMaterialResponse(
+    val deleted: Boolean
+)
+
+@Serializable
+data class DeleteMaterialCollectionResponse(
     val deleted: Boolean
 )
 

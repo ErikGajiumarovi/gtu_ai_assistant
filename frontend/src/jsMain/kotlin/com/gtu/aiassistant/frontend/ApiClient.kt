@@ -116,9 +116,23 @@ class ApiClient(private val baseUrl: String = "") {
         return response.materials
     }
 
-    suspend fun uploadMaterial(file: Any): MaterialResponse {
+    suspend fun listMaterialCollections(): List<MaterialCollectionResponse> {
+        val response: ListMaterialCollectionsResponse = request("/api/material-collections", HttpMethod.Get)
+        return response.collections
+    }
+
+    suspend fun createMaterialCollection(name: String): MaterialCollectionResponse =
+        request("/api/material-collections", HttpMethod.Post, CreateMaterialCollectionRequest(name))
+
+    suspend fun deleteMaterialCollection(collectionId: String): DeleteMaterialCollectionResponse =
+        request("/api/material-collections/$collectionId", HttpMethod.Delete)
+
+    suspend fun uploadMaterial(file: Any, collectionId: String?): MaterialResponse {
         val formData = js("new FormData()")
         formData.append("file", file)
+        if (!collectionId.isNullOrBlank()) {
+            formData.append("collectionId", collectionId)
+        }
 
         val headers = Headers().also {
             authToken?.let { token -> it.set("Authorization", "Bearer $token") }

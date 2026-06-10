@@ -5,7 +5,10 @@ import com.gtu.aiassistant.application.chat.CreateChatWithAgentUseCaseImpl
 import com.gtu.aiassistant.application.chat.DeleteChatUseCaseImpl
 import com.gtu.aiassistant.application.chat.ListChatsUseCaseImpl
 import com.gtu.aiassistant.application.materials.DeleteMaterialUseCaseImpl
+import com.gtu.aiassistant.application.materials.CreateMaterialCollectionUseCaseImpl
+import com.gtu.aiassistant.application.materials.DeleteMaterialCollectionUseCaseImpl
 import com.gtu.aiassistant.application.materials.DownloadMaterialUseCaseImpl
+import com.gtu.aiassistant.application.materials.ListMaterialCollectionsUseCaseImpl
 import com.gtu.aiassistant.application.materials.ListMaterialsUseCaseImpl
 import com.gtu.aiassistant.application.materials.MaterialChunkBuilder
 import com.gtu.aiassistant.application.materials.MaterialIngestionWorker
@@ -60,7 +63,10 @@ import com.gtu.aiassistant.domain.knowledge.port.output.SearchKnowledgePort
 import com.gtu.aiassistant.domain.knowledge.port.output.UpsertKnowledgeDocumentPort
 import com.gtu.aiassistant.domain.knowledge.port.output.UpsertKnowledgeSourcesPort
 import com.gtu.aiassistant.domain.materials.port.input.DeleteMaterialUseCase
+import com.gtu.aiassistant.domain.materials.port.input.CreateMaterialCollectionUseCase
+import com.gtu.aiassistant.domain.materials.port.input.DeleteMaterialCollectionUseCase
 import com.gtu.aiassistant.domain.materials.port.input.DownloadMaterialUseCase
+import com.gtu.aiassistant.domain.materials.port.input.ListMaterialCollectionsUseCase
 import com.gtu.aiassistant.domain.materials.port.input.ListMaterialsUseCase
 import com.gtu.aiassistant.domain.materials.port.input.UploadMaterialUseCase
 import com.gtu.aiassistant.domain.materials.port.output.DeleteMaterialChunksPort
@@ -167,6 +173,9 @@ fun main() {
                 listMaterialsUseCase = koin.get(),
                 downloadMaterialUseCase = koin.get(),
                 deleteMaterialUseCase = koin.get(),
+                createMaterialCollectionUseCase = koin.get(),
+                listMaterialCollectionsUseCase = koin.get(),
+                deleteMaterialCollectionUseCase = koin.get(),
                 jwtSecret = runtimeConfig.jwtSecret,
                 jwtIssuer = runtimeConfig.jwtIssuer
             )
@@ -311,9 +320,9 @@ private fun appModule(
             single<ReplaceMaterialDocumentChunksPort> { InMemoryReplaceMaterialDocumentChunksPort(get()) }
             single<DeleteMaterialChunksPort> { InMemoryDeleteMaterialChunksPort(get()) }
             single<SearchUserMaterialsPort> { InMemorySearchUserMaterialsPort(get()) }
-            single<FindMaterialCollectionPort> { InMemoryFindMaterialCollectionPort() }
-            single<SaveMaterialCollectionPort> { InMemorySaveMaterialCollectionPort() }
-            single<DeleteMaterialCollectionPort> { InMemoryDeleteMaterialCollectionPort() }
+            single<FindMaterialCollectionPort> { InMemoryFindMaterialCollectionPort(get()) }
+            single<SaveMaterialCollectionPort> { InMemorySaveMaterialCollectionPort(get()) }
+            single<DeleteMaterialCollectionPort> { InMemoryDeleteMaterialCollectionPort(get()) }
             single<SearchKnowledgePort> { DisabledSearchKnowledgePort() }
             single<UpsertKnowledgeDocumentPort> { DisabledUpsertKnowledgeDocumentPort() }
             single<UpsertKnowledgeSourcesPort> { DisabledUpsertKnowledgeSourcesPort() }
@@ -381,14 +390,17 @@ private fun appModule(
 
     single<RegisterUserUseCase> { RegisterUserUseCaseImpl(get(), get(), get()) }
     single<LoginInUseCase> { LoginInUseCaseImpl(get(), get(), get()) }
-    single<CreateChatWithAgentUseCase> { CreateChatWithAgentUseCaseImpl(get(), get()) }
-    single<ContinueChatWithAgentUseCase> { ContinueChatWithAgentUseCaseImpl(get(), get(), get()) }
+    single<CreateChatWithAgentUseCase> { CreateChatWithAgentUseCaseImpl(get(), get(), get(), get()) }
+    single<ContinueChatWithAgentUseCase> { ContinueChatWithAgentUseCaseImpl(get(), get(), get(), get(), get()) }
     single<ListChatsUseCase> { ListChatsUseCaseImpl(get()) }
     single<DeleteChatUseCase> { DeleteChatUseCaseImpl(get(), get()) }
     single<UploadMaterialUseCase> { UploadMaterialUseCaseImpl(get(), get(), get(), runtimeConfig.materialMaxFileSizeBytes) }
     single<ListMaterialsUseCase> { ListMaterialsUseCaseImpl(get()) }
     single<DownloadMaterialUseCase> { DownloadMaterialUseCaseImpl(get(), get()) }
     single<DeleteMaterialUseCase> { DeleteMaterialUseCaseImpl(get(), get(), get(), get()) }
+    single<CreateMaterialCollectionUseCase> { CreateMaterialCollectionUseCaseImpl(get()) }
+    single<ListMaterialCollectionsUseCase> { ListMaterialCollectionsUseCaseImpl(get()) }
+    single<DeleteMaterialCollectionUseCase> { DeleteMaterialCollectionUseCaseImpl(get(), get()) }
 }
 
 private data class RuntimeConfig(

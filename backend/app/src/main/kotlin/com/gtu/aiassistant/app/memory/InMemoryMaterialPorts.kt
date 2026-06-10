@@ -69,24 +69,74 @@ class InMemoryDeleteMaterialDocumentPort(
     }
 }
 
-class InMemorySaveMaterialCollectionPort : SaveMaterialCollectionPort {
-    override suspend fun invoke(collection: com.gtu.aiassistant.domain.materials.model.MaterialCollection) =
-        Either.Right(collection)
+class InMemorySaveMaterialCollectionPort(
+    private val state: InMemoryState
+) : SaveMaterialCollectionPort {
+    override suspend fun invoke(collection: com.gtu.aiassistant.domain.materials.model.MaterialCollection): Either<InfrastructureError, com.gtu.aiassistant.domain.materials.model.MaterialCollection> {
+        state.materialCollections[collection.id.value.toString()] = collection
+        return Either.Right(collection)
+    }
 }
 
-class InMemoryFindMaterialCollectionPort : FindMaterialCollectionPort {
+class InMemoryFindMaterialCollectionPort(
+    private val state: InMemoryState
+) : FindMaterialCollectionPort {
     override suspend fun invoke(strategy: FindMaterialCollectionPort.Strategy): Either<InfrastructureError, FindMaterialCollectionPort.Result> =
         Either.Right(
             when (strategy) {
-                is FindMaterialCollectionPort.Strategy.ById -> FindMaterialCollectionPort.Result.Single(collection = null)
-                is FindMaterialCollectionPort.Strategy.ByOwner -> FindMaterialCollectionPort.Result.Multiple(collections = emptyList())
+                is FindMaterialCollectionPort.Strategy.ById -> FindMaterialCollectionPort.Result.Single(
+                    collection = state.materialCollections[strategy.collectionId.value.toString()]
+                        ?.takeIf { it.ownerUserId == strategy.ownerUserId }
+                )
+                is FindMaterialCollectionPort.Strategy.ByOwner -> FindMaterialCollectionPort.Result.Multiple(
+                    collections = state.materialCollections.values
+                        .filter { it.ownerUserId == strategy.ownerUserId }
+                        .sortedByDescending { it.createdAt }
+                )
             }
         )
 }
 
-class InMemoryDeleteMaterialCollectionPort : DeleteMaterialCollectionPort {
-    override suspend fun invoke(ownerUserId: UserId, collectionId: MaterialCollectionId): Either<InfrastructureError, Unit> =
-        Either.Right(Unit)
+class InMemoryDeleteMaterialCollectionPort(
+    private val state: InMemoryState
+) : DeleteMaterialCollectionPort {
+    override suspend fun invoke(ownerUserId: UserId, collectionId: MaterialCollectionId): Either<InfrastructureError, Unit> {
+        state.materialCollections[collectionId.value.toString()]
+            ?.takeIf { it.ownerUserId == ownerUserId }
+            ?.let {
+                state.materialCollections.remove(collectionId.value.toString())
+                state.materialDocuments.replaceAll { _, document ->
+                    if (document.ownerUserId == ownerUserId && document.collectionId == collectionId) {
+                        MaterialDocument.fromTrusted(
+                            id = document.id,
+                            version = document.version + 1,
+                            ownerUserId = document.ownerUserId,
+                            collectionId = null,
+                            title = document.title,
+                            originalFileName = document.originalFileName,
+                            contentType = document.contentType,
+                            sizeBytes = document.sizeBytes,
+                            storageObjectKey = document.storageObjectKey,
+                            ingestionStatus = document.ingestionStatus,
+                            ingestionError = document.ingestionError,
+                            ocrMetadata = document.ocrMetadata,
+                            createdAt = document.createdAt,
+                            updatedAt = java.time.Instant.now()
+                        )
+                    } else {
+                        document
+                    }
+                }
+                state.materialChunks.replaceAll { _, chunk ->
+                    if (chunk.ownerUserId == ownerUserId && chunk.collectionId == collectionId) {
+                        chunk.copy(collectionId = null)
+                    } else {
+                        chunk
+                    }
+                }
+            }
+        return Either.Right(Unit)
+    }
 }
 
 class InMemorySaveMaterialChunksPort(

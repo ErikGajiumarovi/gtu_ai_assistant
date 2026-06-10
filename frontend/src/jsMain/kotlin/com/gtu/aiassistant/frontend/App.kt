@@ -31,6 +31,7 @@ private data class SessionState(val email: String, val jwt: String)
 private data class Notice(val tone: String, val title: String, val detail: String)
 private data class RegistrationDraft(val name: String, val lastName: String, val email: String, val password: String)
 private data class LoginDraft(val email: String, val password: String)
+private data class CollectionDraft(val name: String)
 
 fun main() {
     renderComposable("root") { App() }
@@ -49,6 +50,7 @@ fun App() {
     var loginDraft by remember { mutableStateOf(LoginDraft("", "")) }
     var chats by remember { mutableStateOf<List<ChatResponse>>(emptyList()) }
     var materials by remember { mutableStateOf<List<MaterialResponse>>(emptyList()) }
+    var materialCollections by remember { mutableStateOf<List<MaterialCollectionResponse>>(emptyList()) }
     var selectedChatId by remember { mutableStateOf("") }
     var chatSearch by remember { mutableStateOf("") }
     var isRegistering by remember { mutableStateOf(false) }
@@ -56,8 +58,13 @@ fun App() {
     var isRefreshingChats by remember { mutableStateOf(false) }
     var isLoadingMaterials by remember { mutableStateOf(false) }
     var isUploadingMaterial by remember { mutableStateOf(false) }
+    var isLoadingCollections by remember { mutableStateOf(false) }
+    var isSavingCollection by remember { mutableStateOf(false) }
+    var collectionDraft by remember { mutableStateOf(CollectionDraft("")) }
+    var uploadCollectionId by remember { mutableStateOf<String?>(null) }
     var selectedSourceMode by remember { mutableStateOf(AgentSourceMode.GTU_AND_MY_MATERIALS) }
     var selectedDocumentIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var selectedCollectionIds by remember { mutableStateOf<Set<String>>(emptySet()) }
 
     var isStreaming by remember { mutableStateOf(false) }
     var streamingText by remember { mutableStateOf("") }
@@ -88,9 +95,11 @@ fun App() {
         if (session != null) {
             refreshChats(apiClient, { chats = sortChats(it) }, { notice = it }, { isRefreshingChats = it })
             refreshMaterials(apiClient, { materials = it }, { notice = it }, { isLoadingMaterials = it })
+            refreshMaterialCollections(apiClient, { materialCollections = it }, { notice = it }, { isLoadingCollections = it })
         } else {
             chats = emptyList(); selectedChatId = ""; pendingUserText = ""; streamingText = ""
-            materials = emptyList(); selectedDocumentIds = emptySet(); selectedSourceMode = AgentSourceMode.GTU_AND_MY_MATERIALS
+            materials = emptyList(); materialCollections = emptyList(); selectedDocumentIds = emptySet(); selectedCollectionIds = emptySet()
+            uploadCollectionId = null; selectedSourceMode = AgentSourceMode.GTU_AND_MY_MATERIALS
         }
     }
 
@@ -128,20 +137,50 @@ fun App() {
             Div(attrs = { style { display(DisplayStyle.Grid); property("grid-template-columns", "260px 1fr"); property("height", "100vh") } }) {
                 Sidebar(
                     chats = filteredChats, selectedChatId = selectedChatId, session = session!!,
-                    materials = materials, selectedDocumentIds = selectedDocumentIds,
+                    materials = materials, collections = materialCollections,
+                    selectedDocumentIds = selectedDocumentIds, selectedCollectionIds = selectedCollectionIds,
+                    collectionDraft = collectionDraft, uploadCollectionId = uploadCollectionId,
                     isRefreshingChats = isRefreshingChats, isStreaming = isStreaming,
                     isLoadingMaterials = isLoadingMaterials, isUploadingMaterial = isUploadingMaterial,
+                    isLoadingCollections = isLoadingCollections, isSavingCollection = isSavingCollection,
                     onSelectChat = { selectedChatId = it; pendingUserText = ""; streamingText = "" },
                     onNewChat = { selectedChatId = ""; pendingUserText = ""; streamingText = ""; chatSearch = ""; notice = null },
                     onLogout = { session = null },
                     onSearchChange = { chatSearch = it },
                     onRefresh = { scope.launch { refreshChats(apiClient, { chats = sortChats(it) }, { notice = it }, { isRefreshingChats = it }) } },
                     onRefreshMaterials = { scope.launch { refreshMaterials(apiClient, { materials = it }, { notice = it }, { isLoadingMaterials = it }) } },
+                    onRefreshCollections = { scope.launch { refreshMaterialCollections(apiClient, { materialCollections = it }, { notice = it }, { isLoadingCollections = it }) } },
+                    onCollectionDraftChange = { collectionDraft = it },
+                    onUploadCollectionChange = { uploadCollectionId = it },
+                    onCreateCollection = {
+                        scope.launch {
+                            val name = collectionDraft.name.trim()
+                            if (name.isEmpty()) return@launch
+                            isSavingCollection = true
+                            try {
+                                val collection = apiClient.createMaterialCollection(name)
+                                collectionDraft = CollectionDraft("")
+                                uploadCollectionId = collection.id
+                                refreshMaterialCollections(apiClient, { materialCollections = it }, { notice = it }, { isLoadingCollections = it })
+                            } catch (e: Exception) { showError("Create collection failed", e) } finally { isSavingCollection = false }
+                        }
+                    },
+                    onDeleteCollection = { collection ->
+                        scope.launch {
+                            try {
+                                apiClient.deleteMaterialCollection(collection.id)
+                                selectedCollectionIds = selectedCollectionIds - collection.id
+                                if (uploadCollectionId == collection.id) uploadCollectionId = null
+                                refreshMaterialCollections(apiClient, { materialCollections = it }, { notice = it }, { isLoadingCollections = it })
+                                refreshMaterials(apiClient, { materials = it }, { notice = it }, { isLoadingMaterials = it })
+                            } catch (e: Exception) { showError("Delete collection failed", e) }
+                        }
+                    },
                     onUploadMaterial = { file ->
                         scope.launch {
                             isUploadingMaterial = true
                             try {
-                                apiClient.uploadMaterial(file)
+                                apiClient.uploadMaterial(file, uploadCollectionId)
                                 refreshMaterials(apiClient, { materials = it }, { notice = it }, { isLoadingMaterials = it })
                             } catch (e: Exception) { showError("Upload failed", e) } finally { isUploadingMaterial = false }
                         }
@@ -164,6 +203,9 @@ fun App() {
                     },
                     onToggleMaterial = { materialId, checked ->
                         selectedDocumentIds = if (checked) selectedDocumentIds + materialId else selectedDocumentIds - materialId
+                    },
+                    onToggleCollection = { collectionId, checked ->
+                        selectedCollectionIds = if (checked) selectedCollectionIds + collectionId else selectedCollectionIds - collectionId
                     }
                 )
                 ChatScreen(
@@ -171,6 +213,7 @@ fun App() {
                     streamingText = streamingText, pendingUserText = pendingUserText,
                     selectedSourceMode = selectedSourceMode,
                     selectedDocumentCount = selectedDocumentIds.size,
+                    selectedCollectionCount = selectedCollectionIds.size,
                     onDismissNotice = { notice = null },
                     onSourceModeChange = { selectedSourceMode = it },
                     onOpenMaterialCitation = { url ->
@@ -192,6 +235,7 @@ fun App() {
                                     CreateChatWithAgentRequest(
                                         originalText = trimmed,
                                         sourceMode = selectedSourceMode,
+                                        collectionIds = selectedCollectionIds.toList(),
                                         documentIds = selectedDocumentIds.toList()
                                     ),
                                     onToken = { token -> streamingText += token },
@@ -210,6 +254,7 @@ fun App() {
                                     selectedChat.id, ContinueChatWithAgentRequest(
                                         originalText = trimmed,
                                         sourceMode = selectedSourceMode,
+                                        collectionIds = selectedCollectionIds.toList(),
                                         documentIds = selectedDocumentIds.toList()
                                     ),
                                     onToken = { token -> streamingText += token },
@@ -310,7 +355,7 @@ private fun AuthPage(
 private fun ChatScreen(
     notice: Notice?, selectedChat: ChatResponse?,
     isStreaming: Boolean, streamingText: String, pendingUserText: String,
-    selectedSourceMode: AgentSourceMode, selectedDocumentCount: Int,
+    selectedSourceMode: AgentSourceMode, selectedDocumentCount: Int, selectedCollectionCount: Int,
     onDismissNotice: () -> Unit,
     onSourceModeChange: (AgentSourceMode) -> Unit,
     onOpenMaterialCitation: (String) -> Unit,
@@ -373,6 +418,7 @@ private fun ChatScreen(
                 SourceModeSelector(
                     selectedSourceMode = selectedSourceMode,
                     selectedDocumentCount = selectedDocumentCount,
+                    selectedCollectionCount = selectedCollectionCount,
                     onSourceModeChange = onSourceModeChange,
                     disabled = isStreaming
                 )
@@ -483,6 +529,7 @@ private fun MessageBubble(
 private fun SourceModeSelector(
     selectedSourceMode: AgentSourceMode,
     selectedDocumentCount: Int,
+    selectedCollectionCount: Int,
     onSourceModeChange: (AgentSourceMode) -> Unit,
     disabled: Boolean
 ) {
@@ -503,10 +550,14 @@ private fun SourceModeSelector(
                 }
             }
             Span(attrs = { style { fontSize(12.px); color(Color("#888")) } }) {
-                Text(if (selectedDocumentCount == 0) "All ready materials" else "$selectedDocumentCount selected file(s)")
+                val filters = listOfNotNull(
+                    selectedDocumentCount.takeIf { it > 0 }?.let { "$it file(s)" },
+                    selectedCollectionCount.takeIf { it > 0 }?.let { "$it collection(s)" }
+                )
+                Text(if (filters.isEmpty()) "All ready materials" else filters.joinToString(" + "))
             }
         }
-        if (selectedDocumentCount == 0 && selectedSourceMode.usesMaterials()) {
+        if (selectedDocumentCount == 0 && selectedCollectionCount == 0 && selectedSourceMode.usesMaterials()) {
             Span(attrs = { style { fontSize(11.px); color(Color("#888")) } }) {
                 Text("No files selected: assistant will search all READY materials.")
             }
@@ -517,16 +568,25 @@ private fun SourceModeSelector(
 @Composable
 private fun Sidebar(
     chats: List<ChatResponse>, selectedChatId: String, session: SessionState,
-    materials: List<MaterialResponse>, selectedDocumentIds: Set<String>,
+    materials: List<MaterialResponse>, collections: List<MaterialCollectionResponse>,
+    selectedDocumentIds: Set<String>, selectedCollectionIds: Set<String>,
+    collectionDraft: CollectionDraft, uploadCollectionId: String?,
     isRefreshingChats: Boolean, isStreaming: Boolean,
     isLoadingMaterials: Boolean, isUploadingMaterial: Boolean,
+    isLoadingCollections: Boolean, isSavingCollection: Boolean,
     onSelectChat: (String) -> Unit, onNewChat: () -> Unit, onLogout: () -> Unit,
     onSearchChange: (String) -> Unit, onRefresh: () -> Unit,
     onRefreshMaterials: () -> Unit,
+    onRefreshCollections: () -> Unit,
+    onCollectionDraftChange: (CollectionDraft) -> Unit,
+    onUploadCollectionChange: (String?) -> Unit,
+    onCreateCollection: () -> Unit,
+    onDeleteCollection: (MaterialCollectionResponse) -> Unit,
     onUploadMaterial: (Any) -> Unit,
     onDownloadMaterial: (MaterialResponse) -> Unit,
     onDeleteMaterial: (MaterialResponse) -> Unit,
-    onToggleMaterial: (String, Boolean) -> Unit
+    onToggleMaterial: (String, Boolean) -> Unit,
+    onToggleCollection: (String, Boolean) -> Unit
 ) {
     Aside(attrs = { style { backgroundColor(Color("#171717")); color(Color("white")); display(DisplayStyle.Flex); flexDirection(FlexDirection.Column); property("height", "100vh") } }) {
         Div(attrs = { style { padding(16.px); flexGrow(1.0); display(DisplayStyle.Flex); flexDirection(FlexDirection.Column) } }) {
@@ -566,14 +626,26 @@ private fun Sidebar(
 
             MaterialsPanel(
                 materials = materials,
+                collections = collections,
                 selectedDocumentIds = selectedDocumentIds,
+                selectedCollectionIds = selectedCollectionIds,
+                collectionDraft = collectionDraft,
+                uploadCollectionId = uploadCollectionId,
                 isLoading = isLoadingMaterials,
                 isUploading = isUploadingMaterial,
+                isLoadingCollections = isLoadingCollections,
+                isSavingCollection = isSavingCollection,
                 onRefresh = onRefreshMaterials,
+                onRefreshCollections = onRefreshCollections,
+                onCollectionDraftChange = onCollectionDraftChange,
+                onUploadCollectionChange = onUploadCollectionChange,
+                onCreateCollection = onCreateCollection,
+                onDeleteCollection = onDeleteCollection,
                 onUpload = onUploadMaterial,
                 onDownload = onDownloadMaterial,
                 onDelete = onDeleteMaterial,
-                onToggle = onToggleMaterial
+                onToggle = onToggleMaterial,
+                onToggleCollection = onToggleCollection
             )
 
             Div(attrs = { style { property("border-top", "1px solid rgba(255,255,255,0.1)"); paddingTop(12.px) } }) {
@@ -593,14 +665,26 @@ private fun Sidebar(
 @Composable
 private fun MaterialsPanel(
     materials: List<MaterialResponse>,
+    collections: List<MaterialCollectionResponse>,
     selectedDocumentIds: Set<String>,
+    selectedCollectionIds: Set<String>,
+    collectionDraft: CollectionDraft,
+    uploadCollectionId: String?,
     isLoading: Boolean,
     isUploading: Boolean,
+    isLoadingCollections: Boolean,
+    isSavingCollection: Boolean,
     onRefresh: () -> Unit,
+    onRefreshCollections: () -> Unit,
+    onCollectionDraftChange: (CollectionDraft) -> Unit,
+    onUploadCollectionChange: (String?) -> Unit,
+    onCreateCollection: () -> Unit,
+    onDeleteCollection: (MaterialCollectionResponse) -> Unit,
     onUpload: (Any) -> Unit,
     onDownload: (MaterialResponse) -> Unit,
     onDelete: (MaterialResponse) -> Unit,
-    onToggle: (String, Boolean) -> Unit
+    onToggle: (String, Boolean) -> Unit,
+    onToggleCollection: (String, Boolean) -> Unit
 ) {
     Div(attrs = { style { property("border-top", "1px solid rgba(255,255,255,0.1)"); paddingTop(12.px); marginTop(12.px); marginBottom(12.px) } }) {
         Div(attrs = { style { display(DisplayStyle.Flex); alignItems(AlignItems.Center); justifyContent(JustifyContent.SpaceBetween); marginBottom(8.px) } }) {
@@ -611,6 +695,61 @@ private fun MaterialsPanel(
                 onClick { onRefresh() }
                 style { smallSidebarButtonStyle() }
             }) { Text(if (isLoading) "..." else "Refresh") }
+        }
+        Div(attrs = { style { display(DisplayStyle.Flex); gap(6.px); marginBottom(8.px) } }) {
+            Input(InputType.Text, attrs = {
+                value(collectionDraft.name)
+                placeholder("New collection")
+                if (isSavingCollection) disabled()
+                onInput { event -> onCollectionDraftChange(CollectionDraft((event.target as HTMLInputElement).value)) }
+                style {
+                    flex(1); fontSize(12.px); padding(6.px, 8.px); property("border-radius", "6px")
+                    border(1.px, LineStyle.Solid, Color("rgba(255,255,255,0.15)")); backgroundColor(Color("rgba(255,255,255,0.06)")); color(Color("white"))
+                }
+            })
+            Button(attrs = {
+                attr("type", "button")
+                if (isSavingCollection || collectionDraft.name.trim().isEmpty()) disabled()
+                onClick { onCreateCollection() }
+                style { smallSidebarButtonStyle() }
+            }) { Text(if (isSavingCollection) "..." else "Add") }
+        }
+        Select(attrs = {
+            attr("value", uploadCollectionId ?: "")
+            if (isUploading || isLoadingCollections) disabled()
+            onChange { event ->
+                val value = (event.target as HTMLSelectElement).value
+                onUploadCollectionChange(value.takeIf { it.isNotBlank() })
+            }
+            style {
+                property("width", "100%"); fontSize(12.px); padding(6.px, 8.px); property("border-radius", "6px")
+                border(1.px, LineStyle.Solid, Color("rgba(255,255,255,0.15)")); backgroundColor(Color("rgba(255,255,255,0.06)")); color(Color("white")); marginBottom(8.px)
+            }
+        }) {
+            Option(value = "") { Text("Upload without collection") }
+            collections.forEach { collection -> Option(value = collection.id) { Text("Upload to ${collection.name}") } }
+        }
+        if (collections.isNotEmpty()) {
+            Div(attrs = { style { property("max-height", "110px"); property("overflow-y", "auto"); marginBottom(8.px) } }) {
+                collections.forEach { collection ->
+                    Div(attrs = { style { display(DisplayStyle.Flex); alignItems(AlignItems.Center); gap(6.px); padding(3.px, 0.px) } }) {
+                        Input(InputType.Checkbox, attrs = {
+                            checked(collection.id in selectedCollectionIds)
+                            onChange { event -> onToggleCollection(collection.id, (event.target as HTMLInputElement).checked) }
+                        })
+                        Span(attrs = { style { flex(1); fontSize(11.px); color(Color("rgba(255,255,255,0.68)")); property("overflow", "hidden"); property("text-overflow", "ellipsis"); whiteSpace("nowrap") } }) {
+                            Text(collection.name)
+                        }
+                        Button(attrs = {
+                            attr("type", "button")
+                            onClick { onDeleteCollection(collection) }
+                            style { smallSidebarButtonStyle() }
+                        }) { Text("x") }
+                    }
+                }
+            }
+        } else if (isLoadingCollections) {
+            Div(attrs = { style { fontSize(11.px); color(Color("rgba(255,255,255,0.45)")); marginBottom(8.px) } }) { Text("Loading collections...") }
         }
         Label(attrs = {
             style {
@@ -877,6 +1016,27 @@ private suspend fun refreshMaterials(
         } else {
             val msg = if (error is ApiClientError) "${error.code}: ${error.message}" else error.message ?: "Unknown error"
             onNotice(Notice("error", "Unable to load materials", msg))
+        }
+    } finally {
+        onLoading(false)
+    }
+}
+
+private suspend fun refreshMaterialCollections(
+    apiClient: ApiClient,
+    onCollections: (List<MaterialCollectionResponse>) -> Unit,
+    onNotice: (Notice) -> Unit,
+    onLoading: (Boolean) -> Unit
+) {
+    onLoading(true)
+    try {
+        onCollections(apiClient.listMaterialCollections().sortedByDescending { it.createdAt })
+    } catch (error: Exception) {
+        if (error is ApiClientError && error.status == 401) {
+            onNotice(Notice("error", "Session expired", "Sign in again to continue."))
+        } else {
+            val msg = if (error is ApiClientError) "${error.code}: ${error.message}" else error.message ?: "Unknown error"
+            onNotice(Notice("error", "Unable to load collections", msg))
         }
     } finally {
         onLoading(false)

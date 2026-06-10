@@ -12,11 +12,15 @@ import com.gtu.aiassistant.domain.chat.port.output.GenerateMessageCommand
 import com.gtu.aiassistant.domain.chat.port.output.GenerateMessagePort
 import com.gtu.aiassistant.domain.chat.port.output.SaveChatPort
 import com.gtu.aiassistant.domain.chat.port.output.validateForMessageGeneration
+import com.gtu.aiassistant.domain.materials.port.output.FindMaterialCollectionPort
+import com.gtu.aiassistant.domain.materials.port.output.FindMaterialDocumentPort
 
 class ContinueChatWithAgentUseCaseImpl(
     private val findChatPort: FindChatPort,
     private val generateMessagePort: GenerateMessagePort,
-    private val saveChatPort: SaveChatPort
+    private val saveChatPort: SaveChatPort,
+    private val findMaterialDocumentPort: FindMaterialDocumentPort,
+    private val findMaterialCollectionPort: FindMaterialCollectionPort
 ) : ContinueChatWithAgentUseCase {
     override suspend fun invoke(
         command: com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentCommand
@@ -24,6 +28,7 @@ class ContinueChatWithAgentUseCaseImpl(
         either {
             val existingChat = resolveChat(command).bind()
             val historyForGeneration = buildHistory(existingChat, command).bind()
+            validateFilters(command).bind()
             val generatedMessage = generateMessagePort
                 .invoke(command.toGenerateMessageCommand(historyForGeneration))
                 .mapLeft(ContinueChatWithAgentError::MessageGenerationFailed)
@@ -38,6 +43,7 @@ class ContinueChatWithAgentUseCaseImpl(
         either {
             val existingChat = resolveChat(command).bind()
             val historyForGeneration = buildHistory(existingChat, command).bind()
+            validateFilters(command).bind()
             val generatedMessage = generateMessagePort
                 .stream(command.toGenerateMessageCommand(historyForGeneration), onToken)
                 .mapLeft(ContinueChatWithAgentError::MessageGenerationFailed)
@@ -70,6 +76,22 @@ class ContinueChatWithAgentUseCaseImpl(
             .mapLeft(ContinueChatWithAgentError::InvalidDomainState)
             .bind()
     }
+
+    private suspend fun validateFilters(
+        command: com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentCommand
+    ): Either<ContinueChatWithAgentError, Unit> =
+        validateMaterialFilters(
+            userId = command.userId,
+            collectionIds = command.collectionIds,
+            documentIds = command.documentIds,
+            findMaterialDocumentPort = findMaterialDocumentPort,
+            findMaterialCollectionPort = findMaterialCollectionPort
+        ).mapLeft { error ->
+            when (error) {
+                is MaterialFilterValidationError.InvalidDomainState -> ContinueChatWithAgentError.InvalidDomainState(error.reason)
+                is MaterialFilterValidationError.PersistenceFailed -> ContinueChatWithAgentError.PersistenceFailed(error.reason)
+            }
+        }
 
     private suspend fun saveUpdatedChat(
         existingChat: com.gtu.aiassistant.domain.chat.model.Chat,

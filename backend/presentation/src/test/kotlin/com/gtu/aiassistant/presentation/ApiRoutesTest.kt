@@ -159,6 +159,39 @@ class ApiRoutesTest {
         assertTrue(response.bodyAsText().contains(expectedUserId.value.toString()))
     }
 
+    @Test
+    fun `material collection routes require jwt and use token subject as effective user id`() = testApplication {
+        val expectedUserId = UserId.fromTrusted(UUID.fromString("11111111-1111-1111-1111-111111111111"))
+        var receivedOwnerId: UserId? = null
+
+        application {
+            configureApi(
+                apiDependencies(
+                    createMaterialCollectionUseCase = com.gtu.aiassistant.domain.materials.port.input.CreateMaterialCollectionUseCase { command ->
+                        receivedOwnerId = command.ownerUserId
+                        arrow.core.Either.Right(
+                            com.gtu.aiassistant.domain.materials.port.input.CreateMaterialCollectionResult(
+                                collection = sampleMaterialCollection(command.ownerUserId, command.name)
+                            )
+                        )
+                    }
+                )
+            )
+        }
+
+        val missing = client.get("/api/material-collections")
+        val created = client.post("/api/material-collections") {
+            header(HttpHeaders.Authorization, "Bearer ${issueJwt(expectedUserId.value.toString(), "agent@example.com")}")
+            contentType(ContentType.Application.Json)
+            setBody("""{"name":"Algorithms"}""")
+        }
+
+        assertEquals(HttpStatusCode.Unauthorized, missing.status)
+        assertEquals(HttpStatusCode.Created, created.status)
+        assertEquals(expectedUserId, receivedOwnerId)
+        assertTrue(created.bodyAsText().contains("Algorithms"))
+    }
+
     private fun apiDependencies(
         registerUserUseCase: com.gtu.aiassistant.domain.user.port.input.RegisterUserUseCase = com.gtu.aiassistant.domain.user.port.input.RegisterUserUseCase {
             arrow.core.Either.Right(RegisterUserResult(user = sampleUser(email = it.email.value)))
@@ -171,6 +204,23 @@ class ApiRoutesTest {
         },
         continueChatWithAgentUseCase: ContinueChatWithAgentUseCase = continueChatUseCase { command ->
             arrow.core.Either.Right(ContinueChatWithAgentResult(chat = sampleChat(userId = command.userId)))
+        },
+        createMaterialCollectionUseCase: com.gtu.aiassistant.domain.materials.port.input.CreateMaterialCollectionUseCase = com.gtu.aiassistant.domain.materials.port.input.CreateMaterialCollectionUseCase {
+            arrow.core.Either.Left(
+                com.gtu.aiassistant.domain.materials.port.input.CreateMaterialCollectionError.InvalidDomainState(
+                    com.gtu.aiassistant.domain.materials.model.MaterialCollectionError.BlankName
+                )
+            )
+        },
+        listMaterialCollectionsUseCase: com.gtu.aiassistant.domain.materials.port.input.ListMaterialCollectionsUseCase = com.gtu.aiassistant.domain.materials.port.input.ListMaterialCollectionsUseCase {
+            arrow.core.Either.Right(
+                com.gtu.aiassistant.domain.materials.port.input.ListMaterialCollectionsResult(collections = emptyList())
+            )
+        },
+        deleteMaterialCollectionUseCase: com.gtu.aiassistant.domain.materials.port.input.DeleteMaterialCollectionUseCase = com.gtu.aiassistant.domain.materials.port.input.DeleteMaterialCollectionUseCase {
+            arrow.core.Either.Right(
+                com.gtu.aiassistant.domain.materials.port.input.DeleteMaterialCollectionResult(deleted = false)
+            )
         }
     ) = ApiDependencies(
         registerUserUseCase = registerUserUseCase,
@@ -195,6 +245,9 @@ class ApiRoutesTest {
         deleteMaterialUseCase = com.gtu.aiassistant.domain.materials.port.input.DeleteMaterialUseCase {
             arrow.core.Either.Right(DeleteMaterialResult(deleted = false))
         },
+        createMaterialCollectionUseCase = createMaterialCollectionUseCase,
+        listMaterialCollectionsUseCase = listMaterialCollectionsUseCase,
+        deleteMaterialCollectionUseCase = deleteMaterialCollectionUseCase,
         jwtSecret = jwtSecret,
         jwtIssuer = jwtIssuer
     )
@@ -263,5 +316,22 @@ private fun sampleChat(userId: UserId): Chat {
                 createdAt = createdAt.plusSeconds(5)
             )
         )
+    )
+}
+
+private fun sampleMaterialCollection(
+    ownerUserId: UserId,
+    name: String
+): com.gtu.aiassistant.domain.materials.model.MaterialCollection {
+    val createdAt = Instant.parse("2026-01-01T00:00:00Z")
+    return com.gtu.aiassistant.domain.materials.model.MaterialCollection.fromTrusted(
+        id = com.gtu.aiassistant.domain.materials.model.MaterialCollectionId.fromTrusted(
+            UUID.fromString("55555555-5555-5555-5555-555555555555")
+        ),
+        version = 0L,
+        ownerUserId = ownerUserId,
+        name = name,
+        createdAt = createdAt,
+        updatedAt = createdAt
     )
 }

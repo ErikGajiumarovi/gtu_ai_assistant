@@ -7,6 +7,7 @@ import com.gtu.aiassistant.domain.chat.model.Message
 import com.gtu.aiassistant.domain.chat.model.MessageCitationSourceType
 import com.gtu.aiassistant.domain.chat.model.MessageSenderType
 import com.gtu.aiassistant.domain.materials.model.MaterialCollectionId
+import com.gtu.aiassistant.domain.materials.model.MaterialCollection
 import com.gtu.aiassistant.domain.materials.model.MaterialDocument
 import com.gtu.aiassistant.domain.materials.model.MaterialDocumentId
 import com.gtu.aiassistant.domain.user.model.UserEmail
@@ -468,6 +469,61 @@ internal fun Application.configureRoutes(
                         ifRight = { result -> call.respond(HttpStatusCode.OK, DeleteMaterialResponse(deleted = result.deleted)) }
                     )
                 }
+
+                post("/material-collections") {
+                    val principal = call.principal<AuthenticatedUserPrincipal>()
+                    if (principal == null) {
+                        call.respond(HttpStatusCode.Unauthorized, unauthorizedResponse())
+                        return@post
+                    }
+                    val request = call.receive<CreateMaterialCollectionRequest>()
+
+                    dependencies.createMaterialCollectionUseCase(
+                        com.gtu.aiassistant.domain.materials.port.input.CreateMaterialCollectionCommand(
+                            ownerUserId = principal.userId,
+                            name = request.name
+                        )
+                    ).fold(
+                        ifLeft = { error -> call.respond(error.statusCode(), fromUseCaseError(error)) },
+                        ifRight = { result -> call.respond(HttpStatusCode.Created, result.collection.toMaterialCollectionResponse()) }
+                    )
+                }
+
+                get("/material-collections") {
+                    val principal = call.principal<AuthenticatedUserPrincipal>()
+                    if (principal == null) {
+                        call.respond(HttpStatusCode.Unauthorized, unauthorizedResponse())
+                        return@get
+                    }
+
+                    dependencies.listMaterialCollectionsUseCase(
+                        com.gtu.aiassistant.domain.materials.port.input.ListMaterialCollectionsQuery(principal.userId)
+                    ).fold(
+                        ifLeft = { error -> call.respond(error.statusCode(), fromUseCaseError(error)) },
+                        ifRight = { result ->
+                            call.respond(
+                                HttpStatusCode.OK,
+                                ListMaterialCollectionsResponse(result.collections.map { it.toMaterialCollectionResponse() })
+                            )
+                        }
+                    )
+                }
+
+                delete("/material-collections/{id}") {
+                    val principal = call.principal<AuthenticatedUserPrincipal>()
+                    if (principal == null) {
+                        call.respond(HttpStatusCode.Unauthorized, unauthorizedResponse())
+                        return@delete
+                    }
+                    val collectionId = call.materialCollectionIdOrRespond() ?: return@delete
+
+                    dependencies.deleteMaterialCollectionUseCase(
+                        com.gtu.aiassistant.domain.materials.port.input.DeleteMaterialCollectionCommand(principal.userId, collectionId)
+                    ).fold(
+                        ifLeft = { error -> call.respond(error.statusCode(), fromUseCaseError(error)) },
+                        ifRight = { result -> call.respond(HttpStatusCode.OK, DeleteMaterialCollectionResponse(deleted = result.deleted)) }
+                    )
+                }
             }
         }
     }
@@ -527,6 +583,24 @@ private suspend fun io.ktor.server.application.ApplicationCall.materialDocumentI
         return null
     }
     return MaterialDocumentId.create(raw).fold(
+        ifLeft = {
+            respond(HttpStatusCode.BadRequest, fromDomainError(it))
+            null
+        },
+        ifRight = { it }
+    )
+}
+
+private suspend fun io.ktor.server.application.ApplicationCall.materialCollectionIdOrRespond(): MaterialCollectionId? {
+    val raw = parameters["id"]
+    if (raw == null) {
+        respond(
+            HttpStatusCode.BadRequest,
+            ApiErrorResponse(code = "missing_collection_id", message = "Path parameter 'id' is required")
+        )
+        return null
+    }
+    return MaterialCollectionId.create(raw).fold(
         ifLeft = {
             respond(HttpStatusCode.BadRequest, fromDomainError(it))
             null
@@ -626,6 +700,16 @@ private fun MaterialDocument.toMaterialResponse(): MaterialResponse =
         updatedAt = updatedAt.toString()
     )
 
+private fun MaterialCollection.toMaterialCollectionResponse(): MaterialCollectionResponse =
+    MaterialCollectionResponse(
+        id = id.value.toString(),
+        version = version,
+        ownerUserId = ownerUserId.value.toString(),
+        name = name,
+        createdAt = createdAt.toString(),
+        updatedAt = updatedAt.toString()
+    )
+
 private fun com.gtu.aiassistant.domain.chat.model.MessageCitation.toResponseUrl(): String =
     documentId
         ?.takeIf { sourceType == MessageCitationSourceType.USER_MATERIAL }
@@ -711,4 +795,22 @@ private fun com.gtu.aiassistant.domain.materials.port.input.DeleteMaterialError.
         com.gtu.aiassistant.domain.materials.port.input.DeleteMaterialError.DocumentNotFound -> HttpStatusCode.NotFound
         is com.gtu.aiassistant.domain.materials.port.input.DeleteMaterialError.PersistenceFailed -> HttpStatusCode.InternalServerError
         is com.gtu.aiassistant.domain.materials.port.input.DeleteMaterialError.StorageFailed -> HttpStatusCode.InternalServerError
+    }
+
+private fun com.gtu.aiassistant.domain.materials.port.input.CreateMaterialCollectionError.statusCode(): HttpStatusCode =
+    when (this) {
+        is com.gtu.aiassistant.domain.materials.port.input.CreateMaterialCollectionError.InvalidDomainState -> HttpStatusCode.BadRequest
+        is com.gtu.aiassistant.domain.materials.port.input.CreateMaterialCollectionError.PersistenceFailed -> HttpStatusCode.InternalServerError
+    }
+
+private fun com.gtu.aiassistant.domain.materials.port.input.ListMaterialCollectionsError.statusCode(): HttpStatusCode =
+    when (this) {
+        is com.gtu.aiassistant.domain.materials.port.input.ListMaterialCollectionsError.PersistenceFailed -> HttpStatusCode.InternalServerError
+    }
+
+private fun com.gtu.aiassistant.domain.materials.port.input.DeleteMaterialCollectionError.statusCode(): HttpStatusCode =
+    when (this) {
+        com.gtu.aiassistant.domain.materials.port.input.DeleteMaterialCollectionError.CollectionNotFound -> HttpStatusCode.NotFound
+        com.gtu.aiassistant.domain.materials.port.input.DeleteMaterialCollectionError.CollectionIsNotEmpty -> HttpStatusCode.Conflict
+        is com.gtu.aiassistant.domain.materials.port.input.DeleteMaterialCollectionError.PersistenceFailed -> HttpStatusCode.InternalServerError
     }

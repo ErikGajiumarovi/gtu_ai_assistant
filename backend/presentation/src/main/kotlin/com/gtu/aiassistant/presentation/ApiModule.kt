@@ -26,6 +26,9 @@ data class ApiDependencies(
     val listMaterialsUseCase: com.gtu.aiassistant.domain.materials.port.input.ListMaterialsUseCase,
     val downloadMaterialUseCase: com.gtu.aiassistant.domain.materials.port.input.DownloadMaterialUseCase,
     val deleteMaterialUseCase: com.gtu.aiassistant.domain.materials.port.input.DeleteMaterialUseCase,
+    val createMaterialCollectionUseCase: com.gtu.aiassistant.domain.materials.port.input.CreateMaterialCollectionUseCase,
+    val listMaterialCollectionsUseCase: com.gtu.aiassistant.domain.materials.port.input.ListMaterialCollectionsUseCase,
+    val deleteMaterialCollectionUseCase: com.gtu.aiassistant.domain.materials.port.input.DeleteMaterialCollectionUseCase,
     val jwtSecret: String,
     val jwtIssuer: String
 )
