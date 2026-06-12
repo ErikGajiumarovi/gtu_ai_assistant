@@ -114,6 +114,9 @@ class AgentGenerateMessagePortImpl private constructor(
                 InfrastructureError(cause = IllegalArgumentException("Invalid message history for AI generation: $cause"))
             }
             .bind()
+        ensure(command.sources.hasAny()) {
+            InfrastructureError(cause = IllegalArgumentException("At least one source must be selected"))
+        }
 
         val latestUserText = validMessages.last().originalText
         val gtuSources = if (command.sources.gtu) {
@@ -422,7 +425,13 @@ private fun ChatSources.promptRules(): String {
         " If the allowed sources are insufficient, say so."
     }
 
-    return "Use only these selected sources: $enabled. Do not use $disabled or general knowledge for factual claims.$fallback"
+    val restriction = if (disabled.isBlank()) {
+        "Do not use general knowledge for factual claims."
+    } else {
+        "Do not use $disabled or general knowledge for factual claims."
+    }
+
+    return "Use only these selected sources: $enabled. $restriction$fallback"
 }
 
 private fun ChatSources.combineSources(

@@ -15,6 +15,8 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useForm, type UseFormRegisterReturn } from "react-hook-form";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   ApiClientError,
   createMaterialCollection,
@@ -836,10 +838,24 @@ function MessageBubble({
   return (
     <article className={`message-row ${isUser ? "user" : "assistant"}`}>
       <div className="message-bubble">
-        <p>
-          {text || (isStreaming ? "" : " ")}
-          {isStreaming && <span className="cursor">|</span>}
-        </p>
+        {isUser ? (
+          <p>
+            {text || (isStreaming ? "" : " ")}
+            {isStreaming && <span className="cursor">|</span>}
+          </p>
+        ) : (
+          <div className="markdown-content">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />
+              }}
+            >
+              {text || (isStreaming ? "" : " ")}
+            </ReactMarkdown>
+            {isStreaming && <span className="cursor">|</span>}
+          </div>
+        )}
         {!isUser && citations.length > 0 && (
           <div className="citations">
             {citations.map((citation, index) => (
