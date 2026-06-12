@@ -31,11 +31,13 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
+import io.ktor.http.isSuccess
 
 import io.ktor.utils.io.readUTF8Line
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
+import org.slf4j.LoggerFactory
 import java.time.Instant
 import java.util.UUID
 
@@ -48,11 +50,27 @@ class AgentGenerateMessagePortImpl private constructor(
     private val config: AiConfig,
     private val httpClient: HttpClient
 ) : GenerateMessagePort {
+    private val logger = LoggerFactory.getLogger(AgentGenerateMessagePortImpl::class.java)
+
     override suspend fun invoke(command: GenerateMessageCommand): Either<InfrastructureError, DomainMessage> =
         withContext(Dispatchers.IO) {
             either {
+                logger.info(
+                    "AI generation started model={} sourceMode={} messageCount={} collectionCount={} documentCount={}",
+                    model.id,
+                    command.sourceMode,
+                    command.messages.size,
+                    command.collectionIds.size,
+                    command.documentIds.size
+                )
                 val preparedGeneration = prepareGeneration(command).bind()
                 val generatedText = executeLlm(preparedGeneration).bind()
+                logger.info(
+                    "AI generation completed model={} outputLength={} sourceCount={}",
+                    model.id,
+                    generatedText.length,
+                    preparedGeneration.sources.size
+                )
                 val validMessages = preparedGeneration.validMessages
                 val sources = preparedGeneration.sources
                 buildDomainMessage(validMessages, sources, generatedText)
@@ -65,8 +83,22 @@ class AgentGenerateMessagePortImpl private constructor(
     ): Either<InfrastructureError, DomainMessage> =
         withContext(Dispatchers.IO) {
             either {
+                logger.info(
+                    "AI stream generation started model={} sourceMode={} messageCount={} collectionCount={} documentCount={}",
+                    model.id,
+                    command.sourceMode,
+                    command.messages.size,
+                    command.collectionIds.size,
+                    command.documentIds.size
+                )
                 val preparedGeneration = prepareGeneration(command).bind()
                 val generatedText = executeLlmStream(preparedGeneration, onToken).bind()
+                logger.info(
+                    "AI stream generation completed model={} outputLength={} sourceCount={}",
+                    model.id,
+                    generatedText.length,
+                    preparedGeneration.sources.size
+                )
                 val validMessages = preparedGeneration.validMessages
                 val sources = preparedGeneration.sources
                 buildDomainMessage(validMessages, sources, generatedText)
@@ -113,6 +145,15 @@ class AgentGenerateMessagePortImpl private constructor(
             .distinctBy { it.url to it.snippet }
             .take(MAX_SOURCES)
 
+        logger.info(
+            "AI context prepared sourceMode={} gtuSources={} materialSources={} webSources={} selectedSources={}",
+            command.sourceMode,
+            gtuSources.size,
+            materialSources.size,
+            webSources.size,
+            sources.size
+        )
+
         PreparedGeneration(
             validMessages = validMessages,
             sourceMode = command.sourceMode,
@@ -139,9 +180,13 @@ class AgentGenerateMessagePortImpl private constructor(
 
         val generatedText = Either.catch {
             rawResponse.assistantText()
-        }.mapLeft(::InfrastructureError).bind().trim()
+        }.mapLeft { cause ->
+            logger.warn("AI generation response could not be parsed model={} response={}", model.id, rawResponse, cause)
+            InfrastructureError(cause)
+        }.bind().trim()
 
         ensure(generatedText.isNotBlank()) {
+            logger.warn("AI generation returned blank text model={} response={}", model.id, rawResponse)
             InfrastructureError(cause = IllegalStateException("LLM response is blank"))
         }
         generatedText
@@ -175,40 +220,54 @@ class AgentGenerateMessagePortImpl private constructor(
         }
 
         val textBuilder = StringBuilder()
+        var streamedChunks = 0
 
-        httpClient.preparePost("${config.baseUrl}/chat/completions") {
-            contentType(ContentType.Application.Json)
-            header("Authorization", "Bearer ${config.apiKey}")
-            setBody(requestBody.toString())
-        }.execute { response ->
-            val channel = response.bodyAsChannel()
-            while (!channel.isClosedForRead) {
-                val line = channel.readUTF8Line() ?: break
-                if (line.startsWith("data: ")) {
-                    val data = line.removePrefix("data: ").trim()
-                    if (data == "[DONE]") break
-                    try {
-                        val json = Json.parseToJsonElement(data).jsonObject
-                        val content = json["choices"]
-                            ?.jsonArray
-                            ?.firstOrNull()
-                            ?.jsonObject
-                            ?.get("delta")
-                            ?.jsonObject
-                            ?.get("content")
-                            ?.jsonPrimitive
-                            ?.content ?: ""
-                        if (content.isNotEmpty()) {
-                            onToken(content)
-                            textBuilder.append(content)
+        val streamUrl = config.openAiChatCompletionsUrl()
+        Either.catch {
+            httpClient.preparePost(streamUrl) {
+                contentType(ContentType.Application.Json)
+                header("Authorization", "Bearer ${config.apiKey}")
+                setBody(requestBody.toString())
+            }.execute { response ->
+                if (!response.status.isSuccess()) {
+                    error("LLM stream request failed: status=${response.status.value} url=$streamUrl")
+                }
+                val channel = response.bodyAsChannel()
+                while (!channel.isClosedForRead) {
+                    val line = channel.readUTF8Line() ?: break
+                    if (line.startsWith("data: ")) {
+                        val data = line.removePrefix("data: ").trim()
+                        if (data == "[DONE]") break
+                        try {
+                            val json = Json.parseToJsonElement(data).jsonObject
+                            val content = json["choices"]
+                                ?.jsonArray
+                                ?.firstOrNull()
+                                ?.jsonObject
+                                ?.get("delta")
+                                ?.jsonObject
+                                ?.get("content")
+                                ?.jsonPrimitive
+                                ?.content ?: ""
+                            if (content.isNotEmpty()) {
+                                streamedChunks += 1
+                                onToken(content)
+                                textBuilder.append(content)
+                            }
+                        } catch (error: Exception) {
+                            logger.warn("AI stream chunk parse failed model={} data={}", model.id, data, error)
                         }
-                    } catch (_: Exception) { }
+                    }
                 }
             }
-        }
+        }.mapLeft { cause ->
+            logger.warn("AI stream request failed model={} url={}", model.id, streamUrl, cause)
+            InfrastructureError(cause)
+        }.bind()
 
         val fullText = textBuilder.toString().trim()
         ensure(fullText.isNotBlank()) {
+            logger.warn("AI stream returned blank text model={} streamedChunks={}", model.id, streamedChunks)
             InfrastructureError(cause = IllegalStateException("LLM stream produced empty response"))
         }
         fullText
@@ -338,6 +397,12 @@ private data class PreparedGeneration(
 ) {
     fun systemPrompt(basePrompt: String): String =
         basePrompt + "\n\n" + sourceMode.promptRules() + "\n\n" + sources.toContextBlock()
+}
+
+private fun AiConfig.openAiChatCompletionsUrl(): String {
+    val normalizedBaseUrl = baseUrl.trimEnd('/')
+    val openAiBaseUrl = if (normalizedBaseUrl.endsWith("/v1")) normalizedBaseUrl else "$normalizedBaseUrl/v1"
+    return "$openAiBaseUrl/chat/completions"
 }
 
 private fun ChatSourceMode.usesGtuSources(): Boolean =

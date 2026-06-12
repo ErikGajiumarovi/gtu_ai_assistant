@@ -40,8 +40,10 @@ import kotlinx.serialization.json.Json
 import java.time.Instant
 import java.util.UUID
 import io.ktor.utils.io.toByteArray
+import org.slf4j.LoggerFactory
 
 private val ndjsonJson = Json { encodeDefaults = false }
+private val routesLogger = LoggerFactory.getLogger("com.gtu.aiassistant.presentation.ApiRoutes")
 
 internal fun Application.configureRoutes(
     dependencies: ApiDependencies
@@ -116,6 +118,15 @@ internal fun Application.configureRoutes(
                         return@post
                     }
 
+                    routesLogger.info(
+                        "create chat requested userId={} sourceMode={} textLength={} collectionCount={} documentCount={}",
+                        principal.userId.value,
+                        request.sourceMode,
+                        request.originalText.length,
+                        request.collectionIds.size,
+                        request.documentIds.size
+                    )
+
                     request.toCommand(principal.userId).fold(
                         ifLeft = { domainError ->
                             call.respond(HttpStatusCode.BadRequest, fromDomainError(domainError))
@@ -123,9 +134,16 @@ internal fun Application.configureRoutes(
                         ifRight = { command ->
                             dependencies.createChatWithAgentUseCase(command).fold(
                                 ifLeft = { error ->
+                                    routesLogger.warn("create chat failed userId={} error={}", principal.userId.value, error)
                                     call.respond(error.statusCode(), fromUseCaseError(error))
                                 },
                                 ifRight = { result ->
+                                    routesLogger.info(
+                                        "create chat succeeded userId={} chatId={} messageCount={}",
+                                        principal.userId.value,
+                                        result.chat.id.value,
+                                        result.chat.messages.size
+                                    )
                                     call.respond(HttpStatusCode.Created, result.chat.toResponse())
                                 }
                             )
@@ -142,6 +160,15 @@ internal fun Application.configureRoutes(
                         return@post
                     }
 
+                    routesLogger.info(
+                        "create chat stream requested userId={} sourceMode={} textLength={} collectionCount={} documentCount={}",
+                        principal.userId.value,
+                        request.sourceMode,
+                        request.originalText.length,
+                        request.collectionIds.size,
+                        request.documentIds.size
+                    )
+
                     call.respondTextWriter(
                         contentType = ContentType("application", "x-ndjson"),
                         status = HttpStatusCode.OK
@@ -152,15 +179,30 @@ internal fun Application.configureRoutes(
                                 flush()
                             },
                             ifRight = { command ->
+                                var tokenCount = 0
                                 dependencies.createChatWithAgentUseCase.stream(command) { token ->
+                                    tokenCount += 1
                                     write("{\"t\":${Json.encodeToString(token)}}\n")
                                     flush()
                                 }.fold(
                                     ifLeft = { error ->
+                                        routesLogger.warn(
+                                            "create chat stream failed userId={} tokens={} error={}",
+                                            principal.userId.value,
+                                            tokenCount,
+                                            error
+                                        )
                                         write("{\"e\":${Json.encodeToString(error.toString())}}\n")
                                         flush()
                                     },
                                     ifRight = { result ->
+                                        routesLogger.info(
+                                            "create chat stream succeeded userId={} chatId={} tokens={} messageCount={}",
+                                            principal.userId.value,
+                                            result.chat.id.value,
+                                            tokenCount,
+                                            result.chat.messages.size
+                                        )
                                         val finalJson = buildChatFinalJson(result.chat.toResponse())
                                         write("{\"d\":$finalJson}\n")
                                         flush()
@@ -192,6 +234,16 @@ internal fun Application.configureRoutes(
                         return@post
                     }
 
+                    routesLogger.info(
+                        "continue chat requested userId={} chatId={} sourceMode={} textLength={} collectionCount={} documentCount={}",
+                        principal.userId.value,
+                        chatIdRaw,
+                        request.sourceMode,
+                        request.originalText.length,
+                        request.collectionIds.size,
+                        request.documentIds.size
+                    )
+
                     either {
                         com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentCommand(
                             chatId = ChatId.create(chatIdRaw).bind(),
@@ -208,9 +260,21 @@ internal fun Application.configureRoutes(
                         ifRight = { command ->
                             dependencies.continueChatWithAgentUseCase(command).fold(
                                 ifLeft = { error ->
+                                    routesLogger.warn(
+                                        "continue chat failed userId={} chatId={} error={}",
+                                        principal.userId.value,
+                                        chatIdRaw,
+                                        error
+                                    )
                                     call.respond(error.statusCode(), fromUseCaseError(error))
                                 },
                                 ifRight = { result ->
+                                    routesLogger.info(
+                                        "continue chat succeeded userId={} chatId={} messageCount={}",
+                                        principal.userId.value,
+                                        chatIdRaw,
+                                        result.chat.messages.size
+                                    )
                                     call.respond(HttpStatusCode.OK, result.chat.toResponse())
                                 }
                             )
@@ -239,6 +303,16 @@ internal fun Application.configureRoutes(
                         return@post
                     }
 
+                    routesLogger.info(
+                        "continue chat stream requested userId={} chatId={} sourceMode={} textLength={} collectionCount={} documentCount={}",
+                        principal.userId.value,
+                        chatIdRaw,
+                        request.sourceMode,
+                        request.originalText.length,
+                        request.collectionIds.size,
+                        request.documentIds.size
+                    )
+
                     call.respondTextWriter(
                         contentType = ContentType("application", "x-ndjson"),
                         status = HttpStatusCode.OK
@@ -258,15 +332,31 @@ internal fun Application.configureRoutes(
                                 flush()
                             },
                             ifRight = { command ->
+                                var tokenCount = 0
                                 dependencies.continueChatWithAgentUseCase.stream(command) { token ->
+                                    tokenCount += 1
                                     write("{\"t\":${Json.encodeToString(token)}}\n")
                                     flush()
                                 }.fold(
                                     ifLeft = { error ->
+                                        routesLogger.warn(
+                                            "continue chat stream failed userId={} chatId={} tokens={} error={}",
+                                            principal.userId.value,
+                                            chatIdRaw,
+                                            tokenCount,
+                                            error
+                                        )
                                         write("{\"e\":${Json.encodeToString(error.toString())}}\n")
                                         flush()
                                     },
                                     ifRight = { result ->
+                                        routesLogger.info(
+                                            "continue chat stream succeeded userId={} chatId={} tokens={} messageCount={}",
+                                            principal.userId.value,
+                                            chatIdRaw,
+                                            tokenCount,
+                                            result.chat.messages.size
+                                        )
                                         val finalJson = buildChatFinalJson(result.chat.toResponse())
                                         write("{\"d\":$finalJson}\n")
                                         flush()

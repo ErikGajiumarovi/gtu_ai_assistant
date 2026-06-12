@@ -332,7 +332,7 @@ private fun realAgentGenerateMessagePort(): GenerateMessagePort {
         baseUrl = System.getenv("APP_AI_BASE_URL")
             ?: System.getenv("OPENAI_BASE_URL")
             ?: AiConfig.DEFAULT_OLLAMA_OPENAI_BASE_URL,
-        model = System.getenv("APP_AI_MODEL") ?: AiConfig.GPT_OSS_20B
+        model = System.getenv("APP_AI_MODEL") ?: AiConfig.GEMMA3_4B
     )
 
     return AgentGenerateMessagePortImpl.create(

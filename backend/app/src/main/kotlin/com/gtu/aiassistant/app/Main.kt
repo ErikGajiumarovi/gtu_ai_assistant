@@ -501,7 +501,7 @@ private data class RuntimeConfig(
                 aiMode = AiMode.from(System.getenv("APP_AI_MODE")),
                 aiApiKey = aiApiKey,
                 aiBaseUrl = aiBaseUrl,
-                aiModel = System.getenv("APP_AI_MODEL") ?: AiConfig.GPT_OSS_20B,
+                aiModel = System.getenv("APP_AI_MODEL") ?: AiConfig.GEMMA3_4B,
                 persistenceMode = PersistenceMode.from(System.getenv("APP_PERSISTENCE_MODE")),
                 jdbcUrl = System.getenv("APP_DB_JDBC_URL") ?: "jdbc:postgresql://localhost:5432/gtu_ai_assistant",
                 jdbcUsername = System.getenv("APP_DB_USERNAME") ?: "postgres",

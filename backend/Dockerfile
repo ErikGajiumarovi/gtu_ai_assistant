@@ -23,7 +23,7 @@ COPY --from=builder /workspace/backend/app/build/install/app ./app
 ENV APP_HOST=0.0.0.0
 ENV APP_PORT=8080
 ENV APP_AI_MODE=openai
-ENV APP_AI_MODEL=gpt-oss:20b
+ENV APP_AI_MODEL=gemma3:4b
 ENV APP_PERSISTENCE_MODE=postgres
 
 EXPOSE 8080

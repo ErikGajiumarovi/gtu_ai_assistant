@@ -230,44 +230,49 @@ fun App() {
                             val trimmed = text.trim(); if (trimmed.isEmpty()) return@launch
                             pendingUserText = trimmed; streamingText = ""; isStreaming = true
 
-                            if (selectedChat == null) {
-                                apiClient.createChatWithAgentStream(
-                                    CreateChatWithAgentRequest(
-                                        originalText = trimmed,
-                                        sourceMode = selectedSourceMode,
-                                        collectionIds = selectedCollectionIds.toList(),
-                                        documentIds = selectedDocumentIds.toList()
-                                    ),
-                                    onToken = { token -> streamingText += token },
-                                    onDone = { chat ->
-                                        chats = sortChats(listOf(chat) + chats.filter { it.id != chat.id })
-                                        selectedChatId = chat.id; isStreaming = false
-                                        streamingText = ""; pendingUserText = ""
-                                    },
-                                    onError = { error ->
-                                        isStreaming = false; streamingText = ""; pendingUserText = ""
-                                        showError("Chat failed", error)
-                                    }
-                                )
-                            } else {
-                                apiClient.continueChatWithAgentStream(
-                                    selectedChat.id, ContinueChatWithAgentRequest(
-                                        originalText = trimmed,
-                                        sourceMode = selectedSourceMode,
-                                        collectionIds = selectedCollectionIds.toList(),
-                                        documentIds = selectedDocumentIds.toList()
-                                    ),
-                                    onToken = { token -> streamingText += token },
-                                    onDone = { chat ->
-                                        chats = sortChats(listOf(chat) + chats.filter { it.id != chat.id })
-                                        selectedChatId = chat.id; isStreaming = false
-                                        streamingText = ""; pendingUserText = ""
-                                    },
-                                    onError = { error ->
-                                        isStreaming = false; streamingText = ""; pendingUserText = ""
-                                        showError("Response failed", error)
-                                    }
-                                )
+                            try {
+                                if (selectedChat == null) {
+                                    apiClient.createChatWithAgentStream(
+                                        CreateChatWithAgentRequest(
+                                            originalText = trimmed,
+                                            sourceMode = selectedSourceMode,
+                                            collectionIds = selectedCollectionIds.toList(),
+                                            documentIds = selectedDocumentIds.toList()
+                                        ),
+                                        onToken = { token -> streamingText += token },
+                                        onDone = { chat ->
+                                            chats = sortChats(listOf(chat) + chats.filter { it.id != chat.id })
+                                            selectedChatId = chat.id; isStreaming = false
+                                            streamingText = ""; pendingUserText = ""
+                                        },
+                                        onError = { error ->
+                                            isStreaming = false; streamingText = ""; pendingUserText = ""
+                                            showError("Chat failed", error)
+                                        }
+                                    )
+                                } else {
+                                    apiClient.continueChatWithAgentStream(
+                                        selectedChat.id, ContinueChatWithAgentRequest(
+                                            originalText = trimmed,
+                                            sourceMode = selectedSourceMode,
+                                            collectionIds = selectedCollectionIds.toList(),
+                                            documentIds = selectedDocumentIds.toList()
+                                        ),
+                                        onToken = { token -> streamingText += token },
+                                        onDone = { chat ->
+                                            chats = sortChats(listOf(chat) + chats.filter { it.id != chat.id })
+                                            selectedChatId = chat.id; isStreaming = false
+                                            streamingText = ""; pendingUserText = ""
+                                        },
+                                        onError = { error ->
+                                            isStreaming = false; streamingText = ""; pendingUserText = ""
+                                            showError("Response failed", error)
+                                        }
+                                    )
+                                }
+                            } catch (error: Exception) {
+                                isStreaming = false; streamingText = ""; pendingUserText = ""
+                                showError("Chat failed", error)
                             }
                         }
                     }
