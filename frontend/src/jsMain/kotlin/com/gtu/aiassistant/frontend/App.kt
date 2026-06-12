@@ -14,7 +14,6 @@ import org.jetbrains.compose.web.css.*
 import org.jetbrains.compose.web.dom.*
 import org.jetbrains.compose.web.renderComposable
 import org.w3c.fetch.Headers
-import org.w3c.fetch.RequestInit
 import org.w3c.dom.HTMLElement
 import org.w3c.dom.HTMLInputElement
 import org.w3c.dom.HTMLSelectElement
@@ -962,7 +961,7 @@ private fun CitationResponse.toCitationLabel(): String {
 
 private suspend fun openAuthenticatedDownload(url: String, jwt: String) {
     val headers = Headers().also { it.set("Authorization", "Bearer $jwt") }
-    val response = window.fetch(url, RequestInit(method = "GET", headers = headers)).await()
+    val response = window.fetch(url, browserRequestInit(method = "GET", headers = headers)).await()
     if (!response.ok) {
         throw ApiClientError("HTTP ${response.status}", "download_error", response.status.toInt())
     }

@@ -14,7 +14,6 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.w3c.fetch.Headers
-import org.w3c.fetch.RequestInit
 import kotlin.js.Promise
 
 class ApiClientError(
@@ -139,7 +138,7 @@ class ApiClient(private val baseUrl: String = "") {
         }
         val response = window.fetch(
             "$baseUrl/api/materials",
-            RequestInit(method = "POST", body = formData, headers = headers)
+            browserRequestInit(method = "POST", body = formData, headers = headers)
         ).await()
 
         if (!response.ok) {
@@ -198,7 +197,7 @@ class ApiClient(private val baseUrl: String = "") {
 
             val response = window.fetch(
                 "$baseUrl$path",
-                RequestInit(method = "POST", body = body, headers = headers)
+                browserRequestInit(method = "POST", body = body, headers = headers)
             ).await()
 
             if (!response.ok) {
