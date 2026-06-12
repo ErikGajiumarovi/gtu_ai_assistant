@@ -34,6 +34,7 @@ import {
 import { streamChat } from "./api/stream";
 import type {
   AgentSources,
+  ArtifactResponse,
   ChatResponse,
   CitationResponse,
   LoginInRequest,
@@ -760,6 +761,7 @@ function ChatScreen({
               isUser={message.senderType === "USER"}
               time={formatMessageTime(message.createdAt)}
               citations={message.senderType === "USER" ? [] : message.citations}
+              artifacts={message.senderType === "USER" ? [] : message.artifacts ?? []}
               onOpenMaterialCitation={onOpenMaterialCitation}
             />
           ))}
@@ -825,6 +827,7 @@ function MessageBubble({
   isUser,
   time,
   citations = [],
+  artifacts = [],
   isStreaming = false,
   onOpenMaterialCitation = () => undefined
 }: {
@@ -832,6 +835,7 @@ function MessageBubble({
   isUser: boolean;
   time: string;
   citations?: CitationResponse[];
+  artifacts?: ArtifactResponse[];
   isStreaming?: boolean;
   onOpenMaterialCitation?: (url: string) => void;
 }) {
@@ -865,9 +869,37 @@ function MessageBubble({
             ))}
           </div>
         )}
+        {!isUser && artifacts.length > 0 && <ArtifactList artifacts={artifacts} />}
         {time && <small className="message-time">{time}</small>}
       </div>
     </article>
+  );
+}
+
+function ArtifactList({ artifacts }: { artifacts: ArtifactResponse[] }) {
+  return (
+    <div className="artifacts">
+      {artifacts.map((artifact) => (
+        <div className="artifact-card" key={artifact.id}>
+          <div>
+            <strong>{artifact.fileName}</strong>
+            <small>
+              {artifact.contentType} · {formatBytes(artifact.sizeBytes)}
+            </small>
+          </div>
+          <div className="artifact-actions">
+            {artifact.viewUrl && (
+              <a href={artifact.viewUrl} target="_blank" rel="noreferrer">
+                Open
+              </a>
+            )}
+            <a href={artifact.downloadUrl} target="_blank" rel="noreferrer">
+              Download
+            </a>
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 

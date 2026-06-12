@@ -59,7 +59,23 @@ data class MessageResponse(
     val originalText: String,
     val senderType: String,
     val createdAt: String,
-    val citations: List<CitationResponse> = emptyList()
+    val citations: List<CitationResponse> = emptyList(),
+    val artifacts: List<ArtifactResponse> = emptyList()
+)
+
+@Serializable
+data class ArtifactResponse(
+    val id: String,
+    val fileName: String,
+    val contentType: String,
+    val sizeBytes: Long,
+    val downloadUrl: String,
+    val viewUrl: String? = null
+)
+
+@Serializable
+data class ListArtifactsResponse(
+    val artifacts: List<ArtifactResponse>
 )
 
 @Serializable

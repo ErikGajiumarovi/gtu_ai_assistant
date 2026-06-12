@@ -11,6 +11,7 @@ object ChatMessagesTable : Table(name = "chat_messages") {
     val originalText = text("original_text")
     val senderType = varchar("sender_type", length = 16)
     val createdAt = timestamp("created_at")
+    val artifactsJson = text("artifacts_json").nullable()
 
     override val primaryKey = PrimaryKey(id)
 

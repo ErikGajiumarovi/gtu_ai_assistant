@@ -47,6 +47,7 @@ class AgentGenerateMessagePortImpl private constructor(
     private val knowledgeSearchTool: GtuKnowledgeSearchTool,
     private val userMaterialSearchTool: UserMaterialSearchTool,
     private val webSearchTool: GtuWebSearchTool,
+    private val artifactService: AgentArtifactService?,
     private val config: AiConfig,
     private val httpClient: HttpClient
 ) : GenerateMessagePort {
@@ -73,7 +74,7 @@ class AgentGenerateMessagePortImpl private constructor(
                 )
                 val validMessages = preparedGeneration.validMessages
                 val sources = preparedGeneration.sources
-                buildDomainMessage(validMessages, sources, generatedText)
+                buildDomainMessage(validMessages, sources, generatedText, preparedGeneration.artifactGeneration)
             }
         }
 
@@ -101,7 +102,7 @@ class AgentGenerateMessagePortImpl private constructor(
                 )
                 val validMessages = preparedGeneration.validMessages
                 val sources = preparedGeneration.sources
-                buildDomainMessage(validMessages, sources, generatedText)
+                buildDomainMessage(validMessages, sources, generatedText, preparedGeneration.artifactGeneration)
             }
         }
 
@@ -147,6 +148,9 @@ class AgentGenerateMessagePortImpl private constructor(
         val sources = command.sources.combineSources(gtuSources, materialSources, webSources)
             .distinctBy { it.url to it.snippet }
             .take(MAX_SOURCES)
+        val artifactGeneration = artifactService
+            ?.maybeCreateArtifact(command.userId, latestUserText)
+            ?.bind()
 
         logger.info(
             "AI context prepared sources={} gtuSources={} materialSources={} webSources={} selectedSources={}",
@@ -160,7 +164,8 @@ class AgentGenerateMessagePortImpl private constructor(
         PreparedGeneration(
             validMessages = validMessages,
             sourceSelection = command.sources,
-            sources = sources
+            sources = sources,
+            artifactGeneration = artifactGeneration
         )
     }
 
@@ -279,7 +284,8 @@ class AgentGenerateMessagePortImpl private constructor(
     private fun buildDomainMessage(
         validMessages: List<DomainMessage>,
         sources: List<AgentSource>,
-        generatedText: String
+        generatedText: String,
+        artifactGeneration: ArtifactGenerationResult?
     ): DomainMessage {
         val lastMessageCreatedAt = validMessages.last().createdAt
         return DomainMessage(
@@ -287,7 +293,8 @@ class AgentGenerateMessagePortImpl private constructor(
             originalText = generatedText,
             senderType = MessageSenderType.AI,
             createdAt = maxOf(Instant.now(), lastMessageCreatedAt.plusMillis(1)),
-            citations = sources.toCitations()
+            citations = sources.toCitations(),
+            artifacts = artifactGeneration?.artifacts.orEmpty()
         )
     }
 
@@ -296,7 +303,8 @@ class AgentGenerateMessagePortImpl private constructor(
             config: AiConfig,
             knowledgeSearchTool: GtuKnowledgeSearchTool,
             userMaterialSearchTool: UserMaterialSearchTool,
-            webSearchTool: GtuWebSearchTool
+            webSearchTool: GtuWebSearchTool,
+            artifactService: AgentArtifactService? = null
         ): AgentGenerateMessagePortImpl {
             val client = HttpClient(CIO)
             val openaiClient = OpenAILLMClient(
@@ -319,6 +327,7 @@ class AgentGenerateMessagePortImpl private constructor(
                 knowledgeSearchTool = knowledgeSearchTool,
                 userMaterialSearchTool = userMaterialSearchTool,
                 webSearchTool = webSearchTool,
+                artifactService = artifactService,
                 config = config,
                 httpClient = client
             )
@@ -333,11 +342,26 @@ class AgentGenerateMessagePortImpl private constructor(
             """
             You are the GTU AI Assistant for students of Georgian Technical University.
             Your main task is to help with university-related information: admissions, faculties, services, schedules, scholarships, exchange programs, rules, contacts, and public student resources.
-            Follow the source-selection rules for the current request.
             Answer in the user's language.
+
+            Core capabilities available in this application:
+            - Answer questions using selected sources: GTU public knowledge, uploaded user materials, and optional web context.
+            - Create downloadable artifacts when the user explicitly asks to create, generate, save, export, draw, plot, or prepare a file.
+            - Supported generated artifacts include Markdown/text files, self-contained HTML pages, PNG charts, and DOCX Word documents.
+            - HTML artifacts can be opened in a sandboxed page; other artifacts can be downloaded.
+            - If the user asks what tools or capabilities you have, describe these capabilities directly. Do not say you have no tools.
+
+            Source-grounding rules:
             For factual claims, rely only on the allowed source context. If the context does not confirm the answer, say that it could not be confirmed from the allowed sources.
             Do not invent deadlines, prices, contacts, rules, or personal student data.
             Never claim access to private systems such as VICI, e-learning, testing, finances, or personal records.
+
+            Artifact rules:
+            - If Artifact context is present, an artifact was already created by the backend before your final answer. Mention its download/open links and briefly describe what was created.
+            - Do not refuse artifact creation only because source context is empty. Artifact creation is a formatting/generation task, not a factual-source lookup.
+            - For a user request like "create a docx report about GTU AI Assistant capabilities", use the capability list in this system prompt as valid self-context.
+            - If artifact creation failed, explain the failure briefly and continue with a useful text answer.
+
             Keep the answer concise and practical.
             Return only the assistant reply text.
             """
@@ -396,11 +420,19 @@ private fun List<KoogMessage.Response>.assistantText(): String =
 private data class PreparedGeneration(
     val validMessages: List<DomainMessage>,
     val sourceSelection: ChatSources,
-    val sources: List<AgentSource>
+    val sources: List<AgentSource>,
+    val artifactGeneration: ArtifactGenerationResult?
 ) {
     fun systemPrompt(basePrompt: String): String =
-        basePrompt + "\n\n" + sourceSelection.promptRules() + "\n\n" + sources.toContextBlock()
+        basePrompt + "\n\n" + sourceSelection.promptRules() + "\n\n" + sources.toContextBlock() + artifactGeneration.toContextBlock()
 }
+
+private fun ArtifactGenerationResult?.toContextBlock(): String =
+    if (this == null) {
+        ""
+    } else {
+        "\n\nArtifact context:\n$context\nMention the generated artifact links in the final answer."
+    }
 
 private fun AiConfig.openAiChatCompletionsUrl(): String {
     val normalizedBaseUrl = baseUrl.trimEnd('/')

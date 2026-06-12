@@ -10,4 +10,5 @@ internal object ChatMessageRecords {
     val originalText = table.originalText
     val senderType = table.senderType
     val createdAt = table.createdAt
+    val artifactsJson = table.artifactsJson
 }

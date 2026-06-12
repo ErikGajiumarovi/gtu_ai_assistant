@@ -1,6 +1,8 @@
 package com.gtu.aiassistant.presentation
 
 import arrow.core.raise.either
+import com.gtu.aiassistant.domain.artifacts.model.GeneratedArtifactId
+import com.gtu.aiassistant.domain.artifacts.model.isViewableHtmlArtifact
 import com.gtu.aiassistant.domain.chat.model.ChatId
 import com.gtu.aiassistant.domain.chat.model.ChatSources
 import com.gtu.aiassistant.domain.chat.model.Message
@@ -19,6 +21,7 @@ import io.ktor.http.ContentDisposition
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.withCharset
 import io.ktor.http.content.PartData
 import io.ktor.http.content.forEachPart
 import io.ktor.server.application.Application
@@ -29,6 +32,7 @@ import io.ktor.server.request.receive
 import io.ktor.server.request.receiveMultipart
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondBytes
+import io.ktor.server.response.header
 import io.ktor.server.response.respondTextWriter
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
@@ -614,6 +618,103 @@ internal fun Application.configureRoutes(
                         ifRight = { result -> call.respond(HttpStatusCode.OK, DeleteMaterialCollectionResponse(deleted = result.deleted)) }
                     )
                 }
+
+                get("/artifacts/{artifactId}/download") {
+                    val principal = call.principal<AuthenticatedUserPrincipal>()
+                    if (principal == null) {
+                        call.respond(HttpStatusCode.Unauthorized, unauthorizedResponse())
+                        return@get
+                    }
+
+                    val artifactId = call.parameters["artifactId"]
+                        ?.let { GeneratedArtifactId.create(it).getOrNull() }
+                    if (artifactId == null) {
+                        call.respond(HttpStatusCode.BadRequest, ApiErrorResponse("invalid_artifact_id", "Invalid artifact id"))
+                        return@get
+                    }
+
+                    dependencies.readGeneratedArtifactContentPort(artifactId).fold(
+                        ifLeft = { error ->
+                            routesLogger.warn("artifact download failed userId={} artifactId={} error={}", principal.userId.value, artifactId.value, error)
+                            call.respond(HttpStatusCode.InternalServerError, ApiErrorResponse("artifact_read_failed", "Failed to read artifact"))
+                        },
+                        ifRight = { content ->
+                            if (content == null) {
+                                call.respond(HttpStatusCode.NotFound, ApiErrorResponse("artifact_not_found", "Artifact not found"))
+                                return@fold
+                            }
+                            if (content.artifact.ownerUserId != principal.userId) {
+                                call.respond(HttpStatusCode.Forbidden, ApiErrorResponse("access_denied", "Access denied"))
+                                return@fold
+                            }
+                            call.response.header(
+                                HttpHeaders.ContentDisposition,
+                                ContentDisposition.Attachment.withParameter(
+                                    ContentDisposition.Parameters.FileName,
+                                    content.artifact.fileName
+                                ).toString()
+                            )
+                            call.respondBytes(
+                                bytes = content.bytes,
+                                contentType = runCatching { ContentType.parse(content.artifact.contentType) }
+                                    .getOrDefault(ContentType.Application.OctetStream)
+                            )
+                        }
+                    )
+                }
+
+                get("/artifacts/{artifactId}/view") {
+                    val principal = call.principal<AuthenticatedUserPrincipal>()
+                    if (principal == null) {
+                        call.respond(HttpStatusCode.Unauthorized, unauthorizedResponse())
+                        return@get
+                    }
+
+                    val artifactId = call.parameters["artifactId"]
+                        ?.let { GeneratedArtifactId.create(it).getOrNull() }
+                    if (artifactId == null) {
+                        call.respond(HttpStatusCode.BadRequest, ApiErrorResponse("invalid_artifact_id", "Invalid artifact id"))
+                        return@get
+                    }
+
+                    dependencies.readGeneratedArtifactContentPort(artifactId).fold(
+                        ifLeft = { error ->
+                            routesLogger.warn("artifact view failed userId={} artifactId={} error={}", principal.userId.value, artifactId.value, error)
+                            call.respond(HttpStatusCode.InternalServerError, ApiErrorResponse("artifact_read_failed", "Failed to read artifact"))
+                        },
+                        ifRight = { content ->
+                            if (content == null) {
+                                call.respond(HttpStatusCode.NotFound, ApiErrorResponse("artifact_not_found", "Artifact not found"))
+                                return@fold
+                            }
+                            if (content.artifact.ownerUserId != principal.userId) {
+                                call.respond(HttpStatusCode.Forbidden, ApiErrorResponse("access_denied", "Access denied"))
+                                return@fold
+                            }
+                            if (!isViewableHtmlArtifact(content.artifact.fileName, content.artifact.contentType)) {
+                                call.respond(HttpStatusCode.UnsupportedMediaType, ApiErrorResponse("unsupported_artifact_view", "Only HTML artifacts can be opened as pages"))
+                                return@fold
+                            }
+                            call.response.header(
+                                HttpHeaders.ContentDisposition,
+                                ContentDisposition.Inline.withParameter(
+                                    ContentDisposition.Parameters.FileName,
+                                    content.artifact.fileName
+                                ).toString()
+                            )
+                            call.response.header(
+                                "Content-Security-Policy",
+                                "sandbox allow-scripts allow-forms allow-popups allow-downloads; default-src 'self' data: blob: https:; script-src 'unsafe-inline' 'unsafe-eval' blob: https:; style-src 'unsafe-inline' https:; img-src data: blob: https:; font-src data: https:; connect-src https:; frame-ancestors 'none'; base-uri 'none'"
+                            )
+                            call.response.header("Referrer-Policy", "no-referrer")
+                            call.response.header("X-Content-Type-Options", "nosniff")
+                            call.respondBytes(
+                                bytes = content.bytes,
+                                contentType = ContentType.Text.Html.withCharset(Charsets.UTF_8)
+                            )
+                        }
+                    )
+                }
             }
         }
     }
@@ -762,6 +863,16 @@ private fun com.gtu.aiassistant.domain.chat.model.Chat.toResponse(): ChatRespons
                         documentId = citation.documentId?.value?.toString(),
                         pageStart = citation.pageStart,
                         pageEnd = citation.pageEnd
+                    )
+                },
+                artifacts = message.artifacts.map { artifact ->
+                    ArtifactResponse(
+                        id = artifact.id.value.toString(),
+                        fileName = artifact.fileName,
+                        contentType = artifact.contentType,
+                        sizeBytes = artifact.sizeBytes,
+                        downloadUrl = artifact.downloadUrl,
+                        viewUrl = artifact.viewUrl
                     )
                 }
             )

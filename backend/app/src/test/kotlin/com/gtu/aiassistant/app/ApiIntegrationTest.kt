@@ -1,5 +1,6 @@
 package com.gtu.aiassistant.app
 
+import arrow.core.Either
 import com.gtu.aiassistant.application.chat.ContinueChatWithAgentUseCaseImpl
 import com.gtu.aiassistant.application.chat.CreateChatWithAgentUseCaseImpl
 import com.gtu.aiassistant.application.chat.DeleteChatUseCaseImpl
@@ -305,6 +306,7 @@ private fun testApiDependencies(generateMessagePort: GenerateMessagePort): ApiDe
             findMaterialCollectionPort = findMaterialCollectionPort,
             deleteMaterialCollectionPort = deleteMaterialCollectionPort
         ),
+        readGeneratedArtifactContentPort = { Either.Right(null) },
         jwtSecret = jwtConfig.secret,
         jwtIssuer = jwtConfig.issuer
     )

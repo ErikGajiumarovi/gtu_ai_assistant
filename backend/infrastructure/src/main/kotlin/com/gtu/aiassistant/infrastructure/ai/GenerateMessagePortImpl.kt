@@ -137,6 +137,8 @@ class GenerateMessagePortImpl private constructor(
             You are an AI assistant in a chat with a user.
             Use the provided conversation history.
             Answer the latest user message directly.
+            You can describe the application capabilities: source-grounded chat, uploaded-material search, web context, and generated artifacts such as text/Markdown files, HTML pages, PNG charts, and DOCX documents.
+            If the user asks what tools or capabilities you have, do not say you have no tools; describe these application-level capabilities.
             Keep the reply concise, relevant, and helpful.
             Return only the assistant reply text.
             """

@@ -22,12 +22,19 @@ import com.gtu.aiassistant.app.materials.MaterialIngestionSchedulerConfig
 import com.gtu.aiassistant.app.memory.InMemoryDeleteMaterialChunksPort
 import com.gtu.aiassistant.app.memory.InMemoryDeleteMaterialCollectionPort
 import com.gtu.aiassistant.app.memory.InMemoryDeleteMaterialDocumentPort
+import com.gtu.aiassistant.app.memory.InMemoryFindGeneratedArtifactPort
 import com.gtu.aiassistant.app.memory.InMemoryFindMaterialCollectionPort
 import com.gtu.aiassistant.app.memory.InMemoryFindMaterialDocumentPort
+import com.gtu.aiassistant.app.memory.InMemoryGeneratedArtifactObjectStoragePort
+import com.gtu.aiassistant.app.memory.InMemoryReadGeneratedArtifactContentPort
 import com.gtu.aiassistant.app.memory.InMemoryReplaceMaterialDocumentChunksPort
 import com.gtu.aiassistant.app.memory.InMemorySaveMaterialChunksPort
 import com.gtu.aiassistant.app.memory.InMemorySearchUserMaterialsPort
+import com.gtu.aiassistant.app.memory.InMemoryStoreGeneratedArtifactPort
 import com.gtu.aiassistant.infrastructure.ai.AgentGenerateMessagePortImpl
+import com.gtu.aiassistant.infrastructure.ai.AgentArtifactService
+import com.gtu.aiassistant.infrastructure.ai.AgentSpaceClient
+import com.gtu.aiassistant.infrastructure.ai.AgentSpaceConfig
 import com.gtu.aiassistant.infrastructure.ai.AiConfig
 import com.gtu.aiassistant.infrastructure.ai.embedding.EmbeddingConfig
 import com.gtu.aiassistant.infrastructure.ai.embedding.EmbeddingMode
@@ -54,6 +61,10 @@ import com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentUseCase
 import com.gtu.aiassistant.domain.chat.port.input.CreateChatWithAgentUseCase
 import com.gtu.aiassistant.domain.chat.port.input.DeleteChatUseCase
 import com.gtu.aiassistant.domain.chat.port.input.ListChatsUseCase
+import com.gtu.aiassistant.domain.artifacts.port.output.FindGeneratedArtifactPort
+import com.gtu.aiassistant.domain.artifacts.port.output.GeneratedArtifactObjectStoragePort
+import com.gtu.aiassistant.domain.artifacts.port.output.ReadGeneratedArtifactContentPort
+import com.gtu.aiassistant.domain.artifacts.port.output.StoreGeneratedArtifactPort
 import com.gtu.aiassistant.domain.chat.port.output.DeleteChatPort
 import com.gtu.aiassistant.domain.chat.port.output.FindChatPort
 import com.gtu.aiassistant.domain.chat.port.output.GenerateMessagePort
@@ -100,6 +111,9 @@ import com.gtu.aiassistant.domain.user.port.output.VerifyPasswordPort
 import com.gtu.aiassistant.infrastructure.persistence.chat.DeleteChatPortImpl
 import com.gtu.aiassistant.infrastructure.persistence.chat.FindChatPortImpl
 import com.gtu.aiassistant.infrastructure.persistence.chat.SaveChatPortImpl
+import com.gtu.aiassistant.infrastructure.persistence.artifacts.FindGeneratedArtifactPortImpl
+import com.gtu.aiassistant.infrastructure.persistence.artifacts.ReadGeneratedArtifactContentPortImpl
+import com.gtu.aiassistant.infrastructure.persistence.artifacts.StoreGeneratedArtifactPortImpl
 import com.gtu.aiassistant.infrastructure.persistence.config.DatabaseFactory
 import com.gtu.aiassistant.infrastructure.persistence.config.PersistenceConfig
 import com.gtu.aiassistant.infrastructure.persistence.knowledge.SaveKnowledgeIngestionRunPortImpl
@@ -128,6 +142,8 @@ import com.gtu.aiassistant.infrastructure.security.Argon2VerifyPasswordPortImpl
 import com.gtu.aiassistant.infrastructure.security.IssueJwtPortImpl
 import com.gtu.aiassistant.infrastructure.security.JwtConfig
 import com.gtu.aiassistant.infrastructure.storage.LocalMaterialObjectStoragePort
+import com.gtu.aiassistant.infrastructure.storage.LocalGeneratedArtifactObjectStoragePort
+import com.gtu.aiassistant.infrastructure.storage.MinioGeneratedArtifactObjectStorageFactory
 import com.gtu.aiassistant.infrastructure.storage.MinioMaterialObjectStorageConfig
 import com.gtu.aiassistant.infrastructure.storage.MinioMaterialObjectStorageFactory
 import com.gtu.aiassistant.infrastructure.knowledge.DisabledSaveKnowledgeIngestionRunPort
@@ -185,6 +201,7 @@ fun main() {
                 createMaterialCollectionUseCase = koin.get(),
                 listMaterialCollectionsUseCase = koin.get(),
                 deleteMaterialCollectionUseCase = koin.get(),
+                readGeneratedArtifactContentPort = koin.get(),
                 jwtSecret = runtimeConfig.jwtSecret,
                 jwtIssuer = runtimeConfig.jwtIssuer
             )
@@ -271,7 +288,7 @@ private fun appModule(
                     model = runtimeConfig.aiModel
                 )
             }
-            single<GenerateMessagePort> { AgentGenerateMessagePortImpl.create(get(), get(), get(), get()) }
+            single<GenerateMessagePort> { AgentGenerateMessagePortImpl.create(get(), get(), get(), get(), get()) }
         }
     }
 
@@ -299,6 +316,30 @@ private fun appModule(
             )
         }
     }
+    single<GeneratedArtifactObjectStoragePort> {
+        when (runtimeConfig.fileStorageMode) {
+            FileStorageMode.LOCAL -> LocalGeneratedArtifactObjectStoragePort(Path.of(runtimeConfig.localStorageDir))
+            FileStorageMode.MINIO -> MinioGeneratedArtifactObjectStorageFactory.create(
+                MinioMaterialObjectStorageConfig(
+                    endpoint = runtimeConfig.minioEndpoint ?: error("APP_MINIO_ENDPOINT must be set when APP_FILE_STORAGE_MODE=minio"),
+                    accessKey = runtimeConfig.minioAccessKey ?: error("APP_MINIO_ACCESS_KEY must be set when APP_FILE_STORAGE_MODE=minio"),
+                    secretKey = runtimeConfig.minioSecretKey ?: error("APP_MINIO_SECRET_KEY must be set when APP_FILE_STORAGE_MODE=minio"),
+                    bucket = runtimeConfig.minioBucket ?: error("APP_MINIO_BUCKET must be set when APP_FILE_STORAGE_MODE=minio"),
+                    region = runtimeConfig.minioRegion
+                )
+            )
+        }
+    }
+    single {
+        AgentSpaceConfig(
+            baseUrl = runtimeConfig.agentSpaceBaseUrl,
+            token = runtimeConfig.agentSpaceToken,
+            defaultTimeoutSeconds = runtimeConfig.agentSpaceTimeoutSeconds,
+            outputLimitChars = runtimeConfig.agentSpaceOutputLimitChars
+        )
+    }
+    single { AgentSpaceClient(get(), get()) }
+    single { AgentArtifactService(get(), get()) }
     single {
         MaterialTextExtractionConfig(
             ocrEnabled = runtimeConfig.materialOcrEnabled,
@@ -352,6 +393,9 @@ private fun appModule(
             single<FindMaterialCollectionPort> { InMemoryFindMaterialCollectionPort(get()) }
             single<SaveMaterialCollectionPort> { InMemorySaveMaterialCollectionPort(get()) }
             single<DeleteMaterialCollectionPort> { InMemoryDeleteMaterialCollectionPort(get()) }
+            single<StoreGeneratedArtifactPort> { InMemoryStoreGeneratedArtifactPort(get(), get()) }
+            single<FindGeneratedArtifactPort> { InMemoryFindGeneratedArtifactPort(get()) }
+            single<ReadGeneratedArtifactContentPort> { InMemoryReadGeneratedArtifactContentPort(get(), get()) }
             single<SearchKnowledgePort> { DisabledSearchKnowledgePort() }
             single<UpsertKnowledgeDocumentPort> { DisabledUpsertKnowledgeDocumentPort() }
             single<UpsertKnowledgeSourcesPort> { DisabledUpsertKnowledgeSourcesPort() }
@@ -386,6 +430,9 @@ private fun appModule(
             single<FindMaterialCollectionPort> { FindMaterialCollectionPortImpl(get()) }
             single<SaveMaterialCollectionPort> { SaveMaterialCollectionPortImpl(get()) }
             single<DeleteMaterialCollectionPort> { DeleteMaterialCollectionPortImpl(get()) }
+            single<StoreGeneratedArtifactPort> { StoreGeneratedArtifactPortImpl(get(), get()) }
+            single<FindGeneratedArtifactPort> { FindGeneratedArtifactPortImpl(get()) }
+            single<ReadGeneratedArtifactContentPort> { ReadGeneratedArtifactContentPortImpl(get(), get()) }
             single<SearchKnowledgePort> {
                 if (runtimeConfig.ragEnabled) {
                     SearchKnowledgePortImpl(get(), get())
@@ -478,7 +525,11 @@ private data class RuntimeConfig(
     val tesseractLanguages: String,
     val tesseractTimeoutSeconds: Long,
     val materialOcrMinTextChars: Int,
-    val materialOcrRenderDpi: Int
+    val materialOcrRenderDpi: Int,
+    val agentSpaceBaseUrl: String?,
+    val agentSpaceToken: String?,
+    val agentSpaceTimeoutSeconds: Int,
+    val agentSpaceOutputLimitChars: Int
 ) {
     companion object {
         fun fromEnvironment(): RuntimeConfig {
@@ -501,7 +552,7 @@ private data class RuntimeConfig(
                 aiMode = AiMode.from(System.getenv("APP_AI_MODE")),
                 aiApiKey = aiApiKey,
                 aiBaseUrl = aiBaseUrl,
-                aiModel = System.getenv("APP_AI_MODEL") ?: AiConfig.GEMMA3_4B,
+                aiModel = System.getenv("APP_AI_MODEL") ?: AiConfig.GEMMA4_31B,
                 persistenceMode = PersistenceMode.from(System.getenv("APP_PERSISTENCE_MODE")),
                 jdbcUrl = System.getenv("APP_DB_JDBC_URL") ?: "jdbc:postgresql://localhost:5432/gtu_ai_assistant",
                 jdbcUsername = System.getenv("APP_DB_USERNAME") ?: "postgres",
@@ -549,7 +600,11 @@ private data class RuntimeConfig(
                     .coerceAtLeast(0),
                 materialOcrRenderDpi = (System.getenv("APP_MATERIAL_OCR_RENDER_DPI") ?: MaterialTextExtractionConfig.DEFAULT_OCR_RENDER_DPI.toString())
                     .toInt()
-                    .coerceIn(72, 600)
+                    .coerceIn(72, 600),
+                agentSpaceBaseUrl = System.getenv("APP_AGENT_SPACE_BASE_URL")?.takeIf(String::isNotBlank),
+                agentSpaceToken = System.getenv("APP_AGENT_SPACE_TOKEN")?.takeIf(String::isNotBlank),
+                agentSpaceTimeoutSeconds = (System.getenv("APP_AGENT_SPACE_TIMEOUT_SECONDS") ?: "30").toInt().coerceIn(1, 120),
+                agentSpaceOutputLimitChars = (System.getenv("APP_AGENT_SPACE_OUTPUT_LIMIT_CHARS") ?: "20000").toInt().coerceAtLeast(1000)
             )
         }
     }

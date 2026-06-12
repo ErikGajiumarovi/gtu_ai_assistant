@@ -36,6 +36,34 @@ services:
       retries: 10
       start_period: 10s
 
+  agent_space:
+    build:
+      context: services/agent_space
+    container_name: gtu-ai-assistant-agent-space
+    environment:
+      AGENT_SPACE_TOKEN: ${AGENT_SPACE_TOKEN:-dev-agent-space-token}
+      AGENT_SPACE_DEFAULT_TIMEOUT_SECONDS: ${AGENT_SPACE_DEFAULT_TIMEOUT_SECONDS:-30}
+      AGENT_SPACE_MAX_TIMEOUT_SECONDS: ${AGENT_SPACE_MAX_TIMEOUT_SECONDS:-120}
+      AGENT_SPACE_OUTPUT_LIMIT_CHARS: ${AGENT_SPACE_OUTPUT_LIMIT_CHARS:-20000}
+      AGENT_SPACE_MAX_ARTIFACT_BYTES: ${AGENT_SPACE_MAX_ARTIFACT_BYTES:-26214400}
+    expose:
+      - "8080"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 2g
+    cpus: "1.5"
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -H \"X-Agent-Space-Token: $${AGENT_SPACE_TOKEN}\" http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - agent_space_network
+
   backend:
     build:
       context: .
@@ -46,11 +74,13 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      agent_space:
+        condition: service_healthy
     environment:
       APP_HOST: 0.0.0.0
       APP_PORT: 8080
       APP_AI_MODE: openai
-      APP_AI_MODEL: gemma3:4b
+      APP_AI_MODEL: gemma4:31b
       APP_RAG_ENABLED: "true"
       APP_CRAWLER_ENABLED: "true"
       APP_RAG_INGEST_ON_STARTUP: "true"
@@ -69,8 +99,15 @@ services:
       APP_MINIO_REGION: us-east-1
       APP_MATERIAL_OCR_ENABLED: "true"
       APP_TESSERACT_LANGUAGES: eng+rus
+      APP_AGENT_SPACE_BASE_URL: http://agent_space:8080
+      APP_AGENT_SPACE_TOKEN: ${AGENT_SPACE_TOKEN:-dev-agent-space-token}
+      APP_AGENT_SPACE_TIMEOUT_SECONDS: "30"
+      APP_AGENT_SPACE_OUTPUT_LIMIT_CHARS: "20000"
     ports:
       - "8080:8080"
+    networks:
+      - default
+      - agent_space_network
 
   frontend:
     build:
@@ -85,3 +122,7 @@ services:
 volumes:
   postgres_data:
   minio_data:
+
+networks:
+  default:
+  agent_space_network:

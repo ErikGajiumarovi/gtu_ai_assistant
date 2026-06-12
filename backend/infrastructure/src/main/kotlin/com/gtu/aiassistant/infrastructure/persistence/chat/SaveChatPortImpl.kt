@@ -58,6 +58,7 @@ class SaveChatPortImpl(
                 this[ChatMessageRecords.originalText] = message.originalText
                 this[ChatMessageRecords.senderType] = message.senderType.name
                 this[ChatMessageRecords.createdAt] = message.createdAt
+                this[ChatMessageRecords.artifactsJson] = encodeArtifacts(message.artifacts)
             }
 
             val citations = chat.messages.flatMap { message ->

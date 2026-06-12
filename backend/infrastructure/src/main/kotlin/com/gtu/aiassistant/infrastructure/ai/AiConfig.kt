@@ -14,12 +14,13 @@ data class AiConfig(
         const val GPT_OSS_20B: String = "gpt-oss:20b"
         const val GPT_OSS_120B: String = "gpt-oss:120b"
         const val GEMMA3_4B: String = "gemma3:4b"
+        const val GEMMA4_31B: String = "gemma4:31b"
 
         fun default20b(): AiConfig =
             AiConfig(
                 apiKey = DEFAULT_OLLAMA_API_KEY,
                 baseUrl = DEFAULT_OLLAMA_OPENAI_BASE_URL,
-                model = GEMMA3_4B
+                model = GEMMA4_31B
             )
 
         fun default120b(): AiConfig =

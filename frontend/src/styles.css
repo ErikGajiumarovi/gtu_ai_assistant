@@ -685,6 +685,49 @@ button:not(:disabled) {
   font-size: 12px;
 }
 
+.artifacts {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.artifact-card {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.artifact-card strong,
+.artifact-card small {
+  display: block;
+}
+
+.artifact-card small {
+  margin-top: 2px;
+  color: #6b7280;
+  font-size: 11px;
+}
+
+.artifact-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.artifact-actions a {
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: #111827;
+  color: #ffffff;
+  font-size: 12px;
+  text-decoration: none;
+}
+
 .message-time {
   display: block;
   margin-top: 6px;

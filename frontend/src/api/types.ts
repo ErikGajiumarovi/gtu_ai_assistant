@@ -53,6 +53,16 @@ export interface MessageResponse {
   senderType: string;
   createdAt: string;
   citations: CitationResponse[];
+  artifacts: ArtifactResponse[];
+}
+
+export interface ArtifactResponse {
+  id: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  downloadUrl: string;
+  viewUrl?: string | null;
 }
 
 export interface ChatResponse {
