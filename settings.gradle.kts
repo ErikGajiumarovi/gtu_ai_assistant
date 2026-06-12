@@ -23,6 +23,5 @@ include(
     ":backend:domain",
     ":backend:application",
     ":backend:infrastructure",
-    ":shared:api-models",
-    ":frontend"
+    ":shared:api-models"
 )
