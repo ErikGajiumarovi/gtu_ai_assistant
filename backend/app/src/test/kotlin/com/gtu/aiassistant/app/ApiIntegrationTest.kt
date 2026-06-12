@@ -331,6 +331,16 @@ private fun realAgentGenerateMessagePort(): GenerateMessagePort {
         apiKey = System.getenv("APP_AI_API_KEY")
             ?: System.getenv("OPENAI_API_KEY")
             ?: AiConfig.DEFAULT_OLLAMA_API_KEY,
+        apiKeys = System.getenv("APP_AI_API_KEYS")
+            ?.split(',')
+            ?.map { it.trim() }
+            ?.filter { it.isNotBlank() }
+            ?.takeIf { it.isNotEmpty() }
+            ?: listOf(
+                System.getenv("APP_AI_API_KEY")
+                    ?: System.getenv("OPENAI_API_KEY")
+                    ?: AiConfig.DEFAULT_OLLAMA_API_KEY
+            ),
         baseUrl = System.getenv("APP_AI_BASE_URL")
             ?: System.getenv("OPENAI_BASE_URL")
             ?: AiConfig.DEFAULT_OLLAMA_OPENAI_BASE_URL,

@@ -7,6 +7,8 @@ build/
 out/
 .DS_Store
 local.properties
+.env
+.env.*
 gradle-dist/
 node_modules/
 frontend/dist/

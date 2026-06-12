@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-dejavu fonts-liberation fontconfig ca-certificates gnupg locales \
     python3 python3-pip python3-venv python3-dev python3-setuptools python3-wheel \
     ffmpeg imagemagick ghostscript tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng \
-    nodejs npm sqlite3 \
+    sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN locale-gen en_US.UTF-8
@@ -25,7 +25,10 @@ RUN pip3 install --no-cache-dir \
     requests httpx aiohttp beautifulsoup4 lxml html5lib python-dotenv pyyaml toml jinja2 python-dateutil \
     click typer rich cryptography patool regex
 
-RUN npm install -g n && n lts && npm install -g typescript ts-node prettier eslint
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && npm install -g typescript ts-node prettier eslint \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
 RUN mkdir -p /workspace/tmp /workspace/input /workspace/output /workspace/scripts \

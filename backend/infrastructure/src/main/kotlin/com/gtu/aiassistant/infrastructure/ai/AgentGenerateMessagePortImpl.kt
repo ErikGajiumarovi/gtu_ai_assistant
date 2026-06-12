@@ -42,13 +42,14 @@ import java.time.Instant
 import java.util.UUID
 
 class AgentGenerateMessagePortImpl private constructor(
-    private val executor: SingleLLMPromptExecutor,
+    private val executors: List<SingleLLMPromptExecutor>,
     private val model: LLModel,
     private val knowledgeSearchTool: GtuKnowledgeSearchTool,
     private val userMaterialSearchTool: UserMaterialSearchTool,
     private val webSearchTool: GtuWebSearchTool,
     private val artifactService: AgentArtifactService?,
     private val config: AiConfig,
+    private val apiKeySelector: AiApiKeySelector,
     private val httpClient: HttpClient
 ) : GenerateMessagePort {
     private val logger = LoggerFactory.getLogger(AgentGenerateMessagePortImpl::class.java)
@@ -182,8 +183,9 @@ class AgentGenerateMessagePortImpl private constructor(
             }
         }
 
+        val selectedApiKey = apiKeySelector.next()
         val rawResponse = Either.catch {
-            executor.execute(llmPrompt, model)
+            executors[selectedApiKey.index].execute(llmPrompt, model)
         }.mapLeft(::InfrastructureError).bind()
 
         val generatedText = Either.catch {
@@ -231,10 +233,11 @@ class AgentGenerateMessagePortImpl private constructor(
         var streamedChunks = 0
 
         val streamUrl = config.openAiChatCompletionsUrl()
+        val selectedApiKey = apiKeySelector.next()
         Either.catch {
             httpClient.preparePost(streamUrl) {
                 contentType(ContentType.Application.Json)
-                header("Authorization", "Bearer ${config.apiKey}")
+                header("Authorization", "Bearer ${selectedApiKey.value}")
                 setBody(requestBody.toString())
             }.execute { response ->
                 if (!response.status.isSuccess()) {
@@ -269,7 +272,7 @@ class AgentGenerateMessagePortImpl private constructor(
                 }
             }
         }.mapLeft { cause ->
-            logger.warn("AI stream request failed model={} url={}", model.id, streamUrl, cause)
+            logger.warn("AI stream request failed model={} url={} apiKeyIndex={}", model.id, streamUrl, selectedApiKey.index, cause)
             InfrastructureError(cause)
         }.bind()
 
@@ -307,14 +310,18 @@ class AgentGenerateMessagePortImpl private constructor(
             artifactService: AgentArtifactService? = null
         ): AgentGenerateMessagePortImpl {
             val client = HttpClient(CIO)
-            val openaiClient = OpenAILLMClient(
-                apiKey = config.apiKey,
-                settings = OpenAIClientSettings(baseUrl = config.baseUrl),
-                baseClient = client
-            )
+            val apiKeys = config.normalizedApiKeys()
+            val executors = apiKeys.map { apiKey ->
+                val openaiClient = OpenAILLMClient(
+                    apiKey = apiKey,
+                    settings = OpenAIClientSettings(baseUrl = config.baseUrl),
+                    baseClient = client
+                )
+                SingleLLMPromptExecutor(openaiClient)
+            }
 
             return AgentGenerateMessagePortImpl(
-                executor = SingleLLMPromptExecutor(openaiClient),
+                executors = executors,
                 model = LLModel(
                     provider = LLMProvider.OpenAI,
                     id = config.model,
@@ -329,6 +336,7 @@ class AgentGenerateMessagePortImpl private constructor(
                 webSearchTool = webSearchTool,
                 artifactService = artifactService,
                 config = config,
+                apiKeySelector = AiApiKeySelector(apiKeys),
                 httpClient = client
             )
         }

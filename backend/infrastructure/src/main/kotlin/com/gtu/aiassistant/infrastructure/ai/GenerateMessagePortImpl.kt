@@ -25,7 +25,8 @@ import java.time.Instant
 import java.util.UUID
 
 class GenerateMessagePortImpl private constructor(
-    private val executor: SingleLLMPromptExecutor,
+    private val executors: List<SingleLLMPromptExecutor>,
+    private val apiKeySelector: AiApiKeySelector,
     private val model: LLModel
 ) : GenerateMessagePort {
 
@@ -80,8 +81,9 @@ class GenerateMessagePortImpl private constructor(
             }
         }
 
+        val selectedApiKey = apiKeySelector.next()
         val rawResponse = Either.catch {
-            executor.execute(llmPrompt, model)
+            executors[selectedApiKey.index].execute(llmPrompt, model)
         }.mapLeft(::InfrastructureError).bind()
 
         val generatedText = Either.catch {
@@ -109,14 +111,20 @@ class GenerateMessagePortImpl private constructor(
 
     companion object {
         fun create(config: AiConfig): GenerateMessagePortImpl {
-            val client = OpenAILLMClient(
-                apiKey = config.apiKey,
-                settings = OpenAIClientSettings(baseUrl = config.baseUrl),
-                baseClient = HttpClient(CIO)
-            )
+            val baseClient = HttpClient(CIO)
+            val apiKeys = config.normalizedApiKeys()
+            val executors = apiKeys.map { apiKey ->
+                val client = OpenAILLMClient(
+                    apiKey = apiKey,
+                    settings = OpenAIClientSettings(baseUrl = config.baseUrl),
+                    baseClient = baseClient
+                )
+                SingleLLMPromptExecutor(client)
+            }
 
             return GenerateMessagePortImpl(
-                executor = SingleLLMPromptExecutor(client),
+                executors = executors,
+                apiKeySelector = AiApiKeySelector(apiKeys),
                 model = LLModel(
                     provider = LLMProvider.OpenAI,
                     id = config.model,

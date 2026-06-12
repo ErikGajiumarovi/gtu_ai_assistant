@@ -283,7 +283,8 @@ private fun appModule(
             single {
                 AiConfig(
                     apiKey = runtimeConfig.aiApiKey
-                        ?: error("APP_AI_API_KEY or OPENAI_API_KEY must be set when APP_AI_MODE=openai"),
+                        ?: error("APP_AI_API_KEYS, APP_AI_API_KEY, or OPENAI_API_KEY must be set when APP_AI_MODE=openai"),
+                    apiKeys = runtimeConfig.aiApiKeys,
                     baseUrl = runtimeConfig.aiBaseUrl,
                     model = runtimeConfig.aiModel
                 )
@@ -484,6 +485,7 @@ private data class RuntimeConfig(
     val port: Int,
     val aiMode: AiMode,
     val aiApiKey: String?,
+    val aiApiKeys: List<String>,
     val aiBaseUrl: String,
     val aiModel: String,
     val persistenceMode: PersistenceMode,
@@ -539,6 +541,12 @@ private data class RuntimeConfig(
             val aiApiKey = System.getenv("APP_AI_API_KEY")
                 ?: System.getenv("OPENAI_API_KEY")
                 ?: AiConfig.DEFAULT_OLLAMA_API_KEY
+            val aiApiKeys = System.getenv("APP_AI_API_KEYS")
+                ?.split(',')
+                ?.map { it.trim() }
+                ?.filter { it.isNotBlank() }
+                ?.takeIf { it.isNotEmpty() }
+                ?: listOf(aiApiKey)
             val ragAllowedDomains = System.getenv("APP_RAG_ALLOWED_DOMAINS")
                 ?.split(',')
                 ?.map { it.trim() }
@@ -551,6 +559,7 @@ private data class RuntimeConfig(
                 port = (System.getenv("APP_PORT") ?: "8080").toInt(),
                 aiMode = AiMode.from(System.getenv("APP_AI_MODE")),
                 aiApiKey = aiApiKey,
+                aiApiKeys = aiApiKeys,
                 aiBaseUrl = aiBaseUrl,
                 aiModel = System.getenv("APP_AI_MODEL") ?: AiConfig.GEMMA4_31B,
                 persistenceMode = PersistenceMode.from(System.getenv("APP_PERSISTENCE_MODE")),
