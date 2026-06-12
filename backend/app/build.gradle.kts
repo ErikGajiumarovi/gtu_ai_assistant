@@ -24,4 +24,15 @@ dependencies {
     implementation(libs.ktor.client.cio)
     implementation(libs.ktor.server.core)
     implementation(libs.ktor.server.netty)
+
+    runtimeOnly(libs.logback.classic)
+    runtimeOnly(libs.log4j.to.slf4j)
+
+    testImplementation(kotlin("test"))
+    testImplementation(libs.kotlinx.serialization.json)
+    testImplementation(libs.ktor.server.test.host)
+}
+
+tasks.test {
+    useJUnitPlatform()
 }

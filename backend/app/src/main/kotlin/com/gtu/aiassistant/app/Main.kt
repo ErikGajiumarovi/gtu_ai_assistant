@@ -83,7 +83,13 @@ import com.gtu.aiassistant.domain.materials.port.output.SaveMaterialChunksPort
 import com.gtu.aiassistant.domain.materials.port.output.SaveMaterialDocumentPort
 import com.gtu.aiassistant.domain.materials.port.output.SearchUserMaterialsPort
 import com.gtu.aiassistant.domain.user.port.input.LoginInUseCase
+import com.gtu.aiassistant.domain.user.port.input.RegisterUserCommand
+import com.gtu.aiassistant.domain.user.port.input.RegisterUserError
 import com.gtu.aiassistant.domain.user.port.input.RegisterUserUseCase
+import com.gtu.aiassistant.domain.user.model.UserEmail
+import com.gtu.aiassistant.domain.user.model.UserLastName
+import com.gtu.aiassistant.domain.user.model.UserName
+import com.gtu.aiassistant.domain.user.model.UserPassword
 import com.gtu.aiassistant.domain.user.port.output.ExistsUserPort
 import com.gtu.aiassistant.domain.user.port.output.FindUserPort
 import com.gtu.aiassistant.domain.user.port.output.HashPasswordPort
@@ -145,6 +151,7 @@ import org.koin.dsl.module
 import java.nio.file.Path
 import java.time.Duration
 import java.time.ZoneId
+import kotlinx.coroutines.runBlocking
 import kotlin.time.Duration.Companion.seconds
 
 fun main() {
@@ -152,6 +159,8 @@ fun main() {
     val koin = startKoin {
         modules(appModule(runtimeConfig))
     }.koin
+
+    seedDefaultUser(koin.get())
 
     koin.get<KnowledgeIngestionScheduler>().start()
     koin.get<MaterialIngestionScheduler>().start()
@@ -181,6 +190,26 @@ fun main() {
             )
         )
     }.start(wait = true)
+}
+
+private fun seedDefaultUser(registerUserUseCase: RegisterUserUseCase) {
+    runBlocking {
+        val command = RegisterUserCommand(
+            name = UserName.create("Admin").getOrNull()!!,
+            lastName = UserLastName.create("User").getOrNull()!!,
+            email = UserEmail.create("admin@gmail.com").getOrNull()!!,
+            password = UserPassword.create("admin123!").getOrNull()!!
+        )
+
+        registerUserUseCase(command).fold(
+            ifLeft = { error ->
+                if (error != RegisterUserError.EmailAlreadyTaken) {
+                    error("Failed to seed default user: $error")
+                }
+            },
+            ifRight = {}
+        )
+    }
 }
 
 private fun appModule(

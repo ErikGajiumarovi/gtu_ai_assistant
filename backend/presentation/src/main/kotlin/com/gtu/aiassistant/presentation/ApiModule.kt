@@ -11,9 +11,12 @@ import io.ktor.server.application.Application
 import io.ktor.server.application.install
 import io.ktor.server.auth.Authentication
 import io.ktor.server.auth.jwt.jwt
+import io.ktor.server.plugins.calllogging.CallLogging
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.server.request.path
 import io.ktor.server.response.respond
 import kotlinx.serialization.json.Json
+import org.slf4j.event.Level
 
 data class ApiDependencies(
     val registerUserUseCase: com.gtu.aiassistant.domain.user.port.input.RegisterUserUseCase,
@@ -41,6 +44,11 @@ data class AuthenticatedUserPrincipal(
 fun Application.configureApi(
     dependencies: ApiDependencies
 ) {
+    install(CallLogging) {
+        level = Level.INFO
+        filter { call -> call.request.path().startsWith("/") }
+    }
+
     install(ContentNegotiation) {
         json(
             Json {
