@@ -1,8 +1,8 @@
-export type AgentSourceMode =
-  | "GTU_ONLY"
-  | "MY_MATERIALS_ONLY"
-  | "GTU_AND_MY_MATERIALS"
-  | "GTU_MY_MATERIALS_AND_WEB";
+export interface AgentSources {
+  gtu: boolean;
+  materials: boolean;
+  web: boolean;
+}
 
 export interface RegisterUserRequest {
   name: string;
@@ -22,7 +22,7 @@ export interface LoginInResponse {
 
 export interface CreateChatWithAgentRequest {
   originalText: string;
-  sourceMode: AgentSourceMode;
+  sources: AgentSources;
   collectionIds: string[];
   documentIds: string[];
 }

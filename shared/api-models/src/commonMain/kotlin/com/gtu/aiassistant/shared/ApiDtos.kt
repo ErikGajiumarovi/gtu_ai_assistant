@@ -22,17 +22,16 @@ data class LoginInResponse(
 )
 
 @Serializable
-enum class AgentSourceMode {
-    GTU_ONLY,
-    MY_MATERIALS_ONLY,
-    GTU_AND_MY_MATERIALS,
-    GTU_MY_MATERIALS_AND_WEB
-}
+data class AgentSources(
+    val gtu: Boolean = true,
+    val materials: Boolean = true,
+    val web: Boolean = false
+)
 
 @Serializable
 data class CreateChatWithAgentRequest(
     val originalText: String,
-    val sourceMode: AgentSourceMode = AgentSourceMode.GTU_AND_MY_MATERIALS,
+    val sources: AgentSources = AgentSources(),
     val collectionIds: List<String> = emptyList(),
     val documentIds: List<String> = emptyList()
 )
@@ -40,7 +39,7 @@ data class CreateChatWithAgentRequest(
 @Serializable
 data class ContinueChatWithAgentRequest(
     val originalText: String,
-    val sourceMode: AgentSourceMode = AgentSourceMode.GTU_AND_MY_MATERIALS,
+    val sources: AgentSources = AgentSources(),
     val collectionIds: List<String> = emptyList(),
     val documentIds: List<String> = emptyList()
 )

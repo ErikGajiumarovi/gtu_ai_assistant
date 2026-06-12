@@ -2,7 +2,7 @@ package com.gtu.aiassistant.presentation
 
 import arrow.core.raise.either
 import com.gtu.aiassistant.domain.chat.model.ChatId
-import com.gtu.aiassistant.domain.chat.model.ChatSourceMode
+import com.gtu.aiassistant.domain.chat.model.ChatSources
 import com.gtu.aiassistant.domain.chat.model.Message
 import com.gtu.aiassistant.domain.chat.model.MessageCitationSourceType
 import com.gtu.aiassistant.domain.chat.model.MessageSenderType
@@ -119,9 +119,9 @@ internal fun Application.configureRoutes(
                     }
 
                     routesLogger.info(
-                        "create chat requested userId={} sourceMode={} textLength={} collectionCount={} documentCount={}",
+                        "create chat requested userId={} sources={} textLength={} collectionCount={} documentCount={}",
                         principal.userId.value,
-                        request.sourceMode,
+                        request.sources,
                         request.originalText.length,
                         request.collectionIds.size,
                         request.documentIds.size
@@ -161,9 +161,9 @@ internal fun Application.configureRoutes(
                     }
 
                     routesLogger.info(
-                        "create chat stream requested userId={} sourceMode={} textLength={} collectionCount={} documentCount={}",
+                        "create chat stream requested userId={} sources={} textLength={} collectionCount={} documentCount={}",
                         principal.userId.value,
-                        request.sourceMode,
+                        request.sources,
                         request.originalText.length,
                         request.collectionIds.size,
                         request.documentIds.size
@@ -235,10 +235,10 @@ internal fun Application.configureRoutes(
                     }
 
                     routesLogger.info(
-                        "continue chat requested userId={} chatId={} sourceMode={} textLength={} collectionCount={} documentCount={}",
+                        "continue chat requested userId={} chatId={} sources={} textLength={} collectionCount={} documentCount={}",
                         principal.userId.value,
                         chatIdRaw,
-                        request.sourceMode,
+                        request.sources,
                         request.originalText.length,
                         request.collectionIds.size,
                         request.documentIds.size
@@ -249,7 +249,7 @@ internal fun Application.configureRoutes(
                             chatId = ChatId.create(chatIdRaw).bind(),
                             userId = principal.userId,
                             message = request.toUserMessage(),
-                            sourceMode = request.sourceMode.toDomain(),
+                            sources = request.sources.toDomain(),
                             collectionIds = request.collectionIds.map { MaterialCollectionId.create(it).bind() },
                             documentIds = request.documentIds.map { MaterialDocumentId.create(it).bind() }
                         )
@@ -304,10 +304,10 @@ internal fun Application.configureRoutes(
                     }
 
                     routesLogger.info(
-                        "continue chat stream requested userId={} chatId={} sourceMode={} textLength={} collectionCount={} documentCount={}",
+                        "continue chat stream requested userId={} chatId={} sources={} textLength={} collectionCount={} documentCount={}",
                         principal.userId.value,
                         chatIdRaw,
-                        request.sourceMode,
+                        request.sources,
                         request.originalText.length,
                         request.collectionIds.size,
                         request.documentIds.size
@@ -322,7 +322,7 @@ internal fun Application.configureRoutes(
                                 chatId = ChatId.create(chatIdRaw).bind(),
                                 userId = principal.userId,
                                 message = request.toUserMessage(),
-                                sourceMode = request.sourceMode.toDomain(),
+                                sources = request.sources.toDomain(),
                                 collectionIds = request.collectionIds.map { MaterialCollectionId.create(it).bind() },
                                 documentIds = request.documentIds.map { MaterialDocumentId.create(it).bind() }
                             )
@@ -722,19 +722,14 @@ private fun CreateChatWithAgentRequest.toCommand(
         com.gtu.aiassistant.domain.chat.port.input.CreateChatWithAgentCommand(
             userId = userId,
             message = toUserMessage(),
-            sourceMode = sourceMode.toDomain(),
+            sources = sources.toDomain(),
             collectionIds = collectionIds.map { MaterialCollectionId.create(it).bind() },
             documentIds = documentIds.map { MaterialDocumentId.create(it).bind() }
         )
     }
 
-private fun AgentSourceMode.toDomain(): ChatSourceMode =
-    when (this) {
-        AgentSourceMode.GTU_ONLY -> ChatSourceMode.GTU_ONLY
-        AgentSourceMode.MY_MATERIALS_ONLY -> ChatSourceMode.MY_MATERIALS_ONLY
-        AgentSourceMode.GTU_AND_MY_MATERIALS -> ChatSourceMode.GTU_AND_MY_MATERIALS
-        AgentSourceMode.GTU_MY_MATERIALS_AND_WEB -> ChatSourceMode.GTU_MY_MATERIALS_AND_WEB
-    }
+private fun AgentSources.toDomain(): ChatSources =
+    ChatSources(gtu = gtu, materials = materials, web = web)
 
 private fun com.gtu.aiassistant.domain.user.model.User.toResponse(): UserResponse =
     UserResponse(

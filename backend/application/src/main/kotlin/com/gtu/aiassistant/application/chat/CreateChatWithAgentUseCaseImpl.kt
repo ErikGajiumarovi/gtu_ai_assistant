@@ -124,7 +124,7 @@ private fun com.gtu.aiassistant.domain.chat.port.input.CreateChatWithAgentComman
     GenerateMessageCommand(
         messages = messages,
         userId = userId,
-        sourceMode = sourceMode,
+        sources = sources,
         collectionIds = collectionIds,
         documentIds = documentIds
     )

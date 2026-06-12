@@ -102,20 +102,20 @@ class ApiIntegrationTest {
         assertEquals(HttpStatusCode.OK, client.post("/api/chats/$chatId/continue") {
             bearer(jwt)
             contentType(ContentType.Application.Json)
-            setBody("""{"originalText":"Continue briefly","sourceMode":"MY_MATERIALS_ONLY"}""")
+            setBody("""{"originalText":"Continue briefly","sources":{"gtu":false,"materials":true,"web":false}}""")
         }.status)
 
         val createStreamBody = client.post("/api/chats/with-agent/stream") {
             bearer(jwt)
             contentType(ContentType.Application.Json)
-            setBody("""{"originalText":"Stream hello","sourceMode":"MY_MATERIALS_ONLY"}""")
+            setBody("""{"originalText":"Stream hello","sources":{"gtu":false,"materials":true,"web":false}}""")
         }.bodyAsText()
         assertNdjsonStreamCompleted(createStreamBody)
 
         val continueStreamBody = client.post("/api/chats/$chatId/continue/stream") {
             bearer(jwt)
             contentType(ContentType.Application.Json)
-            setBody("""{"originalText":"Stream continue","sourceMode":"MY_MATERIALS_ONLY"}""")
+            setBody("""{"originalText":"Stream continue","sources":{"gtu":false,"materials":true,"web":false}}""")
         }.bodyAsText()
         assertNdjsonStreamCompleted(continueStreamBody)
 
@@ -138,7 +138,7 @@ class ApiIntegrationTest {
             val continued = client.post("/api/chats/$chatId/continue") {
                 bearer(jwt)
                 contentType(ContentType.Application.Json)
-                setBody("""{"originalText":"Reply with exactly one short sentence.","sourceMode":"MY_MATERIALS_ONLY"}""")
+                setBody("""{"originalText":"Reply with exactly one short sentence.","sources":{"gtu":false,"materials":true,"web":false}}""")
             }
             assertEquals(HttpStatusCode.OK, continued.status)
             assertAssistantMessagePresent(continued.bodyAsText())
@@ -146,14 +146,14 @@ class ApiIntegrationTest {
             val createStreamBody = client.post("/api/chats/with-agent/stream") {
                 bearer(jwt)
                 contentType(ContentType.Application.Json)
-                setBody("""{"originalText":"Reply with exactly one short streamed sentence.","sourceMode":"MY_MATERIALS_ONLY"}""")
+                setBody("""{"originalText":"Reply with exactly one short streamed sentence.","sources":{"gtu":false,"materials":true,"web":false}}""")
             }.bodyAsText()
             assertNdjsonStreamCompleted(createStreamBody)
 
             val continueStreamBody = client.post("/api/chats/$chatId/continue/stream") {
                 bearer(jwt)
                 contentType(ContentType.Application.Json)
-                setBody("""{"originalText":"Reply with another short streamed sentence.","sourceMode":"MY_MATERIALS_ONLY"}""")
+                setBody("""{"originalText":"Reply with another short streamed sentence.","sources":{"gtu":false,"materials":true,"web":false}}""")
             }.bodyAsText()
             assertNdjsonStreamCompleted(continueStreamBody)
         }
@@ -222,7 +222,7 @@ class ApiIntegrationTest {
         val response = client.post("/api/chats/with-agent") {
             bearer(jwt)
             contentType(ContentType.Application.Json)
-            setBody("""{"originalText":"Hello, answer shortly","sourceMode":"MY_MATERIALS_ONLY"}""")
+            setBody("""{"originalText":"Hello, answer shortly","sources":{"gtu":false,"materials":true,"web":false}}""")
         }
         val body = response.bodyAsText()
         assertEquals(HttpStatusCode.Created, response.status, body)

@@ -31,7 +31,7 @@ import {
 } from "./api/client";
 import { streamChat } from "./api/stream";
 import type {
-  AgentSourceMode,
+  AgentSources,
   ChatResponse,
   CitationResponse,
   LoginInRequest,
@@ -48,12 +48,7 @@ type Notice = {
   detail: string;
 };
 
-const sourceModeOptions: Array<{ value: AgentSourceMode; label: string }> = [
-  { value: "GTU_ONLY", label: "GTU only" },
-  { value: "MY_MATERIALS_ONLY", label: "My materials only" },
-  { value: "GTU_AND_MY_MATERIALS", label: "GTU + my materials" },
-  { value: "GTU_MY_MATERIALS_AND_WEB", label: "GTU + my materials + web" }
-];
+const defaultSources: AgentSources = { gtu: true, materials: true, web: false };
 
 export function App() {
   const queryClient = useQueryClient();
@@ -63,7 +58,7 @@ export function App() {
   const [registeredUser, setRegisteredUser] = useState<UserResponse | null>(null);
   const [selectedChatId, setSelectedChatId] = useState("");
   const [chatSearch, setChatSearch] = useState("");
-  const [selectedSourceMode, setSelectedSourceMode] = useState<AgentSourceMode>("GTU_AND_MY_MATERIALS");
+  const [selectedSources, setSelectedSources] = useState<AgentSources>(defaultSources);
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<Set<string>>(new Set());
   const [selectedCollectionIds, setSelectedCollectionIds] = useState<Set<string>>(new Set());
   const [collectionName, setCollectionName] = useState("");
@@ -136,7 +131,7 @@ export function App() {
       setSelectedDocumentIds(new Set());
       setSelectedCollectionIds(new Set());
       setUploadCollectionId(null);
-      setSelectedSourceMode("GTU_AND_MY_MATERIALS");
+      setSelectedSources(defaultSources);
       queryClient.clear();
     }
   }, [queryClient, session]);
@@ -149,7 +144,7 @@ export function App() {
 
   async function handleSubmit(text: string) {
     const trimmed = text.trim();
-    if (!trimmed || isStreaming) return;
+    if (!trimmed || isStreaming || !hasAnySource(selectedSources)) return;
 
     const abortController = new AbortController();
     streamAbortRef.current = abortController;
@@ -161,7 +156,7 @@ export function App() {
     try {
       const payload = {
         originalText: trimmed,
-        sourceMode: selectedSourceMode,
+        sources: selectedSources,
         collectionIds: [...selectedCollectionIds],
         documentIds: [...selectedDocumentIds]
       };
@@ -278,11 +273,11 @@ export function App() {
         isStreaming={isStreaming}
         streamingText={streamingText}
         pendingUserText={pendingUserText}
-        selectedSourceMode={selectedSourceMode}
+        selectedSources={selectedSources}
         selectedDocumentCount={selectedDocumentIds.size}
         selectedCollectionCount={selectedCollectionIds.size}
         onDismissNotice={() => setNotice(null)}
-        onSourceModeChange={setSelectedSourceMode}
+        onSourcesChange={setSelectedSources}
         onSubmit={(text) => void handleSubmit(text)}
         onStop={() => streamAbortRef.current?.abort()}
         onOpenMaterialCitation={(url) => {
@@ -702,11 +697,11 @@ function ChatScreen({
   isStreaming,
   streamingText,
   pendingUserText,
-  selectedSourceMode,
+  selectedSources,
   selectedDocumentCount,
   selectedCollectionCount,
   onDismissNotice,
-  onSourceModeChange,
+  onSourcesChange,
   onSubmit,
   onStop,
   onOpenMaterialCitation
@@ -716,11 +711,11 @@ function ChatScreen({
   isStreaming: boolean;
   streamingText: string;
   pendingUserText: string;
-  selectedSourceMode: AgentSourceMode;
+  selectedSources: AgentSources;
   selectedDocumentCount: number;
   selectedCollectionCount: number;
   onDismissNotice: () => void;
-  onSourceModeChange: (mode: AgentSourceMode) => void;
+  onSourcesChange: (sources: AgentSources) => void;
   onSubmit: (text: string) => void;
   onStop: () => void;
   onOpenMaterialCitation: (url: string) => void;
@@ -730,6 +725,7 @@ function ChatScreen({
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const existingMessages = selectedChat?.messages ?? [];
   const hasAnyContent = existingMessages.length > 0 || pendingUserText || isStreaming;
+  const canSubmit = hasAnySource(selectedSources);
 
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ block: "end" });
@@ -775,16 +771,18 @@ function ChatScreen({
           className="composer"
           onSubmit={(event) => {
             event.preventDefault();
-            onSubmit(composerText);
-            setComposerText("");
+            if (canSubmit) {
+              onSubmit(composerText);
+              setComposerText("");
+            }
           }}
         >
           <SourceModeSelector
-            selectedSourceMode={selectedSourceMode}
+            selectedSources={selectedSources}
             selectedDocumentCount={selectedDocumentCount}
             selectedCollectionCount={selectedCollectionCount}
             disabled={isStreaming}
-            onSourceModeChange={onSourceModeChange}
+            onSourcesChange={onSourcesChange}
           />
           <div className="composer-row">
             <textarea
@@ -797,8 +795,10 @@ function ChatScreen({
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
-                  onSubmit(composerText);
-                  setComposerText("");
+                  if (canSubmit) {
+                    onSubmit(composerText);
+                    setComposerText("");
+                  }
                 }
               }}
             />
@@ -807,7 +807,7 @@ function ChatScreen({
                 <Square size={16} />
               </button>
             ) : (
-              <button className="send-button" type="submit" disabled={!composerText.trim()} aria-label="Send message">
+              <button className="send-button" type="submit" disabled={!composerText.trim() || !canSubmit} aria-label="Send message">
                 <Send size={17} />
               </button>
             )}
@@ -856,37 +856,49 @@ function MessageBubble({
 }
 
 function SourceModeSelector({
-  selectedSourceMode,
+  selectedSources,
   selectedDocumentCount,
   selectedCollectionCount,
   disabled,
-  onSourceModeChange
+  onSourcesChange
 }: {
-  selectedSourceMode: AgentSourceMode;
+  selectedSources: AgentSources;
   selectedDocumentCount: number;
   selectedCollectionCount: number;
   disabled: boolean;
-  onSourceModeChange: (mode: AgentSourceMode) => void;
+  onSourcesChange: (sources: AgentSources) => void;
 }) {
   const filters = [
     selectedDocumentCount > 0 ? `${selectedDocumentCount} file(s)` : null,
     selectedCollectionCount > 0 ? `${selectedCollectionCount} collection(s)` : null
   ].filter(Boolean);
+  const selectedLabels = [
+    selectedSources.gtu ? "GTU" : null,
+    selectedSources.materials ? "my materials" : null,
+    selectedSources.web ? "web" : null
+  ].filter(Boolean);
+
+  function toggleSource(key: keyof AgentSources): void {
+    onSourcesChange({ ...selectedSources, [key]: !selectedSources[key] });
+  }
 
   return (
     <div className="source-mode-row">
-      <label>
-        Sources
-        <select disabled={disabled} value={selectedSourceMode} onChange={(event) => onSourceModeChange(event.target.value as AgentSourceMode)}>
-          {sourceModeOptions.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      <span>{filters.length ? filters.join(" + ") : "All ready materials"}</span>
-      {usesMaterials(selectedSourceMode) && filters.length === 0 && <small>No files selected: assistant will search all READY materials.</small>}
+      <span className="source-mode-title">Sources</span>
+      <div className="source-toggles" role="group" aria-label="Sources">
+        <button type="button" className={selectedSources.gtu ? "active" : ""} disabled={disabled} onClick={() => toggleSource("gtu")}>
+          GTU
+        </button>
+        <button type="button" className={selectedSources.materials ? "active" : ""} disabled={disabled} onClick={() => toggleSource("materials")}>
+          My materials
+        </button>
+        <button type="button" className={selectedSources.web ? "active" : ""} disabled={disabled} onClick={() => toggleSource("web")}>
+          Web
+        </button>
+      </div>
+      <span>{selectedLabels.length ? selectedLabels.join(" + ") : "Select at least one source"}</span>
+      {selectedSources.materials && <span>{filters.length ? filters.join(" + ") : "All ready materials"}</span>}
+      {selectedSources.materials && filters.length === 0 && <small>No files selected: assistant will search all READY materials.</small>}
     </div>
   );
 }
@@ -998,8 +1010,8 @@ function hostname(url: string): string {
   }
 }
 
-function usesMaterials(mode: AgentSourceMode): boolean {
-  return mode !== "GTU_ONLY";
+function hasAnySource(sources: AgentSources): boolean {
+  return sources.gtu || sources.materials || sources.web;
 }
 
 function toggleValue(current: Set<string>, value: string, checked: boolean): Set<string> {

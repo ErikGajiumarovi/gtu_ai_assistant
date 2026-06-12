@@ -3,7 +3,7 @@ package com.gtu.aiassistant.domain.chat.port.output
 import arrow.core.Either
 import arrow.core.raise.either
 import arrow.core.raise.ensure
-import com.gtu.aiassistant.domain.chat.model.ChatSourceMode
+import com.gtu.aiassistant.domain.chat.model.ChatSources
 import com.gtu.aiassistant.domain.chat.model.Message
 import com.gtu.aiassistant.domain.chat.model.MessageSenderType
 import com.gtu.aiassistant.domain.materials.model.MaterialCollectionId
@@ -20,7 +20,7 @@ interface GenerateMessagePort {
 data class GenerateMessageCommand(
     val messages: List<Message>,
     val userId: UserId,
-    val sourceMode: ChatSourceMode = ChatSourceMode.GTU_AND_MY_MATERIALS,
+    val sources: ChatSources = ChatSources(),
     val collectionIds: List<MaterialCollectionId> = emptyList(),
     val documentIds: List<MaterialDocumentId> = emptyList()
 )

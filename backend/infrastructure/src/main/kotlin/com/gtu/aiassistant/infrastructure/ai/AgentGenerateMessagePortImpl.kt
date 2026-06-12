@@ -12,7 +12,7 @@ import arrow.core.raise.either
 import arrow.core.raise.ensure
 import com.gtu.aiassistant.domain.chat.model.Message as DomainMessage
 import ai.koog.prompt.message.Message as KoogMessage
-import com.gtu.aiassistant.domain.chat.model.ChatSourceMode
+import com.gtu.aiassistant.domain.chat.model.ChatSources
 import com.gtu.aiassistant.domain.chat.model.MessageCitation
 import com.gtu.aiassistant.domain.chat.model.MessageSenderType
 import com.gtu.aiassistant.domain.chat.port.output.GenerateMessageCommand
@@ -56,9 +56,9 @@ class AgentGenerateMessagePortImpl private constructor(
         withContext(Dispatchers.IO) {
             either {
                 logger.info(
-                    "AI generation started model={} sourceMode={} messageCount={} collectionCount={} documentCount={}",
+                    "AI generation started model={} sources={} messageCount={} collectionCount={} documentCount={}",
                     model.id,
-                    command.sourceMode,
+                    command.sources,
                     command.messages.size,
                     command.collectionIds.size,
                     command.documentIds.size
@@ -84,9 +84,9 @@ class AgentGenerateMessagePortImpl private constructor(
         withContext(Dispatchers.IO) {
             either {
                 logger.info(
-                    "AI stream generation started model={} sourceMode={} messageCount={} collectionCount={} documentCount={}",
+                    "AI stream generation started model={} sources={} messageCount={} collectionCount={} documentCount={}",
                     model.id,
-                    command.sourceMode,
+                    command.sources,
                     command.messages.size,
                     command.collectionIds.size,
                     command.documentIds.size
@@ -116,13 +116,13 @@ class AgentGenerateMessagePortImpl private constructor(
             .bind()
 
         val latestUserText = validMessages.last().originalText
-        val gtuSources = if (command.sourceMode.usesGtuSources()) {
+        val gtuSources = if (command.sources.gtu) {
             knowledgeSearchTool.search(latestUserText)
                 .fold(ifLeft = { emptyList() }, ifRight = { it })
         } else {
             emptyList()
         }
-        val materialSources = if (command.sourceMode.usesUserMaterials()) {
+        val materialSources = if (command.sources.materials) {
             userMaterialSearchTool.search(
                 ownerUserId = command.userId,
                 query = latestUserText,
@@ -133,7 +133,7 @@ class AgentGenerateMessagePortImpl private constructor(
             emptyList()
         }
         val bestLocalScore = (gtuSources + materialSources).maxOfOrNull { it.score }
-        val shouldSearchWeb = command.sourceMode.usesWebSources() &&
+        val shouldSearchWeb = command.sources.web &&
             (bestLocalScore == null || bestLocalScore < MIN_RAG_CONFIDENCE || latestUserText.isTimeSensitive())
         val webSources = if (shouldSearchWeb) {
             webSearchTool.search(latestUserText)
@@ -141,13 +141,13 @@ class AgentGenerateMessagePortImpl private constructor(
         } else {
             emptyList()
         }
-        val sources = command.sourceMode.combineSources(gtuSources, materialSources, webSources)
+        val sources = command.sources.combineSources(gtuSources, materialSources, webSources)
             .distinctBy { it.url to it.snippet }
             .take(MAX_SOURCES)
 
         logger.info(
-            "AI context prepared sourceMode={} gtuSources={} materialSources={} webSources={} selectedSources={}",
-            command.sourceMode,
+            "AI context prepared sources={} gtuSources={} materialSources={} webSources={} selectedSources={}",
+            command.sources,
             gtuSources.size,
             materialSources.size,
             webSources.size,
@@ -156,7 +156,7 @@ class AgentGenerateMessagePortImpl private constructor(
 
         PreparedGeneration(
             validMessages = validMessages,
-            sourceMode = command.sourceMode,
+            sourceSelection = command.sources,
             sources = sources
         )
     }
@@ -392,11 +392,11 @@ private fun List<KoogMessage.Response>.assistantText(): String =
 
 private data class PreparedGeneration(
     val validMessages: List<DomainMessage>,
-    val sourceMode: ChatSourceMode,
+    val sourceSelection: ChatSources,
     val sources: List<AgentSource>
 ) {
     fun systemPrompt(basePrompt: String): String =
-        basePrompt + "\n\n" + sourceMode.promptRules() + "\n\n" + sources.toContextBlock()
+        basePrompt + "\n\n" + sourceSelection.promptRules() + "\n\n" + sources.toContextBlock()
 }
 
 private fun AiConfig.openAiChatCompletionsUrl(): String {
@@ -405,42 +405,39 @@ private fun AiConfig.openAiChatCompletionsUrl(): String {
     return "$openAiBaseUrl/chat/completions"
 }
 
-private fun ChatSourceMode.usesGtuSources(): Boolean =
-    this == ChatSourceMode.GTU_ONLY ||
-        this == ChatSourceMode.GTU_AND_MY_MATERIALS ||
-        this == ChatSourceMode.GTU_MY_MATERIALS_AND_WEB
-
-private fun ChatSourceMode.usesUserMaterials(): Boolean =
-    this == ChatSourceMode.MY_MATERIALS_ONLY ||
-        this == ChatSourceMode.GTU_AND_MY_MATERIALS ||
-        this == ChatSourceMode.GTU_MY_MATERIALS_AND_WEB
-
-private fun ChatSourceMode.usesWebSources(): Boolean =
-    this == ChatSourceMode.GTU_MY_MATERIALS_AND_WEB
-
-private fun ChatSourceMode.promptRules(): String =
-    when (this) {
-        ChatSourceMode.GTU_ONLY ->
-            "Use only verified GTU source context. Do not use private user materials or web search context."
-        ChatSourceMode.MY_MATERIALS_ONLY ->
-            "Use only uploaded user materials. Do not use GTU public sources, web search context, or general knowledge for factual claims. If uploaded materials do not contain enough information, say that the uploaded materials do not contain enough information to answer."
-        ChatSourceMode.GTU_AND_MY_MATERIALS ->
-            "Use only verified GTU source context and uploaded user materials. Do not use web search context. If these allowed sources are insufficient, say so."
-        ChatSourceMode.GTU_MY_MATERIALS_AND_WEB ->
-            "Use verified GTU source context and uploaded user materials first. Web search context may be used only as fallback when local sources are insufficient or the question is time-sensitive."
+private fun ChatSources.promptRules(): String {
+    val enabled = listOfNotNull(
+        "verified GTU source context".takeIf { gtu },
+        "uploaded user materials".takeIf { materials },
+        "web search context".takeIf { web }
+    ).joinToString(separator = ", ")
+    val disabled = listOfNotNull(
+        "GTU public sources".takeIf { !gtu },
+        "uploaded user materials".takeIf { !materials },
+        "web search context".takeIf { !web }
+    ).joinToString(separator = ", ")
+    val fallback = if (materials && !gtu && !web) {
+        " If uploaded materials do not contain enough information, say that the uploaded materials do not contain enough information to answer."
+    } else {
+        " If the allowed sources are insufficient, say so."
     }
 
-private fun ChatSourceMode.combineSources(
+    return "Use only these selected sources: $enabled. Do not use $disabled or general knowledge for factual claims.$fallback"
+}
+
+private fun ChatSources.combineSources(
     gtuSources: List<AgentSource>,
     materialSources: List<AgentSource>,
     webSources: List<AgentSource>
-): List<AgentSource> =
-    when (this) {
-        ChatSourceMode.GTU_ONLY -> gtuSources
-        ChatSourceMode.MY_MATERIALS_ONLY -> materialSources
-        ChatSourceMode.GTU_AND_MY_MATERIALS ->
-            materialSources.take(3) + gtuSources.take(3) + materialSources.drop(3) + gtuSources.drop(3)
-        ChatSourceMode.GTU_MY_MATERIALS_AND_WEB ->
-            materialSources.take(2) + gtuSources.take(2) + webSources.take(2) +
-                materialSources.drop(2) + gtuSources.drop(2) + webSources.drop(2)
-    }
+): List<AgentSource> {
+    val selected = listOfNotNull(
+        materialSources.takeIf { materials },
+        gtuSources.takeIf { gtu },
+        webSources.takeIf { web }
+    )
+    if (selected.isEmpty()) return emptyList()
+
+    val firstPass = selected.flatMap { it.take(2) }
+    val remaining = selected.flatMap { it.drop(2) }
+    return firstPass + remaining
+}

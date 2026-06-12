@@ -626,7 +626,7 @@ button:not(:disabled) {
   font-size: 12px;
 }
 
-.source-mode-row label {
+.source-mode-title {
   display: inline-flex;
   gap: 8px;
   align-items: center;
@@ -634,10 +634,26 @@ button:not(:disabled) {
   font-weight: 800;
 }
 
-.source-mode-row select {
-  width: auto;
-  padding: 7px 10px;
-  border-radius: 10px;
+.source-toggles {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.source-toggles button {
+  padding: 7px 11px;
+  border: 1px solid rgba(17, 24, 39, 0.12);
+  border-radius: 999px;
+  color: #4b5563;
+  background: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.source-toggles button.active {
+  border-color: #111827;
+  color: #fff;
+  background: #111827;
 }
 
 .source-mode-row small {
@@ -805,8 +821,8 @@ button:not(:disabled) {
     max-width: 92%;
   }
 
-  .source-mode-row label,
-  .source-mode-row select {
+  .source-mode-title,
+  .source-toggles {
     width: 100%;
   }
 }
