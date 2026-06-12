@@ -10,6 +10,7 @@ import com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentUseCase
 import com.gtu.aiassistant.domain.chat.port.output.FindChatPort
 import com.gtu.aiassistant.domain.chat.port.output.GenerateMessageCommand
 import com.gtu.aiassistant.domain.chat.port.output.GenerateMessagePort
+import com.gtu.aiassistant.domain.chat.port.output.GenerateMessageStreamStatus
 import com.gtu.aiassistant.domain.chat.port.output.SaveChatPort
 import com.gtu.aiassistant.domain.chat.port.output.validateForMessageGeneration
 import com.gtu.aiassistant.domain.materials.port.output.FindMaterialCollectionPort
@@ -38,14 +39,15 @@ class ContinueChatWithAgentUseCaseImpl(
 
     override suspend fun stream(
         command: com.gtu.aiassistant.domain.chat.port.input.ContinueChatWithAgentCommand,
-        onToken: suspend (String) -> Unit
+        onToken: suspend (String) -> Unit,
+        onStatus: suspend (GenerateMessageStreamStatus) -> Unit
     ): Either<ContinueChatWithAgentError, ContinueChatWithAgentResult> =
         either {
             val existingChat = resolveChat(command).bind()
             val historyForGeneration = buildHistory(existingChat, command).bind()
             validateFilters(command).bind()
             val generatedMessage = generateMessagePort
-                .stream(command.toGenerateMessageCommand(historyForGeneration), onToken)
+                .stream(command.toGenerateMessageCommand(historyForGeneration), onToken, onStatus)
                 .mapLeft(ContinueChatWithAgentError::MessageGenerationFailed)
                 .bind()
             saveUpdatedChat(existingChat, command, generatedMessage).bind()

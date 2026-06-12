@@ -14,8 +14,17 @@ import com.gtu.aiassistant.domain.user.model.UserId
 
 interface GenerateMessagePort {
     suspend operator fun invoke(command: GenerateMessageCommand): Either<InfrastructureError, Message>
-    suspend fun stream(command: GenerateMessageCommand, onToken: suspend (String) -> Unit): Either<InfrastructureError, Message>
+    suspend fun stream(
+        command: GenerateMessageCommand,
+        onToken: suspend (String) -> Unit,
+        onStatus: suspend (GenerateMessageStreamStatus) -> Unit = {}
+    ): Either<InfrastructureError, Message>
 }
+
+data class GenerateMessageStreamStatus(
+    val phase: String,
+    val message: String
+)
 
 data class GenerateMessageCommand(
     val messages: List<Message>,

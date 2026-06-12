@@ -9,6 +9,7 @@ import com.gtu.aiassistant.domain.chat.port.input.CreateChatWithAgentResult
 import com.gtu.aiassistant.domain.chat.port.input.CreateChatWithAgentUseCase
 import com.gtu.aiassistant.domain.chat.port.output.GenerateMessageCommand
 import com.gtu.aiassistant.domain.chat.port.output.GenerateMessagePort
+import com.gtu.aiassistant.domain.chat.port.output.GenerateMessageStreamStatus
 import com.gtu.aiassistant.domain.chat.port.output.SaveChatPort
 import com.gtu.aiassistant.domain.chat.port.output.validateForMessageGeneration
 import com.gtu.aiassistant.domain.materials.port.output.FindMaterialCollectionPort
@@ -58,7 +59,8 @@ class CreateChatWithAgentUseCaseImpl(
 
     override suspend fun stream(
         command: com.gtu.aiassistant.domain.chat.port.input.CreateChatWithAgentCommand,
-        onToken: suspend (String) -> Unit
+        onToken: suspend (String) -> Unit,
+        onStatus: suspend (GenerateMessageStreamStatus) -> Unit
     ): Either<CreateChatWithAgentError, CreateChatWithAgentResult> =
         either {
             val chatId = ChatId
@@ -85,7 +87,7 @@ class CreateChatWithAgentUseCaseImpl(
             }.bind()
 
             val generatedMessage = generateMessagePort
-                .stream(command.toGenerateMessageCommand(historyForGeneration), onToken)
+                .stream(command.toGenerateMessageCommand(historyForGeneration), onToken, onStatus)
                 .mapLeft(CreateChatWithAgentError::MessageGenerationFailed)
                 .bind()
 

@@ -6,7 +6,13 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 
 interface StreamCallbacks {
   onToken: (token: string) => void;
+  onStatus?: (status: StreamStatus) => void;
   onDone: (chat: ChatResponse) => void;
+}
+
+export interface StreamStatus {
+  phase: string;
+  message: string;
 }
 
 export async function streamChat(
@@ -72,7 +78,17 @@ function processLine(line: string, callbacks: StreamCallbacks): void {
   }
 
   if (!parsed || typeof parsed !== "object") return;
-  const packet = parsed as { t?: unknown; d?: unknown; e?: unknown };
+  const packet = parsed as { t?: unknown; d?: unknown; e?: unknown; h?: unknown; s?: unknown };
+
+  if (packet.h === true) return;
+
+  if (packet.s && typeof packet.s === "object") {
+    const status = packet.s as { phase?: unknown; message?: unknown };
+    if (typeof status.phase === "string" && typeof status.message === "string") {
+      callbacks.onStatus?.({ phase: status.phase, message: status.message });
+    }
+    return;
+  }
 
   if (typeof packet.t === "string") {
     callbacks.onToken(packet.t);

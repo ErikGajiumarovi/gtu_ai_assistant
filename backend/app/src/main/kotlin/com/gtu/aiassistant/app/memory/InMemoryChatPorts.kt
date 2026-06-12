@@ -8,6 +8,7 @@ import com.gtu.aiassistant.domain.chat.port.output.DeleteChatPort
 import com.gtu.aiassistant.domain.chat.port.output.FindChatPort
 import com.gtu.aiassistant.domain.chat.port.output.GenerateMessageCommand
 import com.gtu.aiassistant.domain.chat.port.output.GenerateMessagePort
+import com.gtu.aiassistant.domain.chat.port.output.GenerateMessageStreamStatus
 import com.gtu.aiassistant.domain.chat.port.output.SaveChatPort
 import com.gtu.aiassistant.domain.model.InfrastructureError
 import java.time.Instant
@@ -65,10 +66,12 @@ class InMemoryGenerateMessagePort : GenerateMessagePort {
 
     override suspend fun stream(
         command: GenerateMessageCommand,
-        onToken: suspend (String) -> Unit
+        onToken: suspend (String) -> Unit,
+        onStatus: suspend (GenerateMessageStreamStatus) -> Unit
     ): Either<InfrastructureError, Message> {
         val lastMessage = command.messages.last()
         val text = "AI response to: ${lastMessage.originalText}"
+        onStatus(GenerateMessageStreamStatus("answering", "Writing answer..."))
         for (word in text.split(" ")) {
             onToken("$word ")
         }

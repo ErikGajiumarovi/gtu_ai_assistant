@@ -17,6 +17,7 @@ import com.gtu.aiassistant.domain.chat.model.MessageCitation
 import com.gtu.aiassistant.domain.chat.model.MessageSenderType
 import com.gtu.aiassistant.domain.chat.port.output.GenerateMessageCommand
 import com.gtu.aiassistant.domain.chat.port.output.GenerateMessagePort
+import com.gtu.aiassistant.domain.chat.port.output.GenerateMessageStreamStatus
 import com.gtu.aiassistant.domain.chat.port.output.validateForMessageGeneration
 import com.gtu.aiassistant.domain.model.InfrastructureError
 import com.gtu.aiassistant.infrastructure.ai.tools.AgentSource
@@ -33,6 +34,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 
+import io.ktor.utils.io.ClosedWriteChannelException
 import io.ktor.utils.io.readUTF8Line
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -81,7 +83,8 @@ class AgentGenerateMessagePortImpl private constructor(
 
     override suspend fun stream(
         command: GenerateMessageCommand,
-        onToken: suspend (String) -> Unit
+        onToken: suspend (String) -> Unit,
+        onStatus: suspend (GenerateMessageStreamStatus) -> Unit
     ): Either<InfrastructureError, DomainMessage> =
         withContext(Dispatchers.IO) {
             either {
@@ -93,8 +96,8 @@ class AgentGenerateMessagePortImpl private constructor(
                     command.collectionIds.size,
                     command.documentIds.size
                 )
-                val preparedGeneration = prepareGeneration(command).bind()
-                val generatedText = executeLlmStream(preparedGeneration, onToken).bind()
+                val preparedGeneration = prepareGeneration(command, onStatus).bind()
+                val generatedText = executeLlmStream(preparedGeneration, onToken, onStatus).bind()
                 logger.info(
                     "AI stream generation completed model={} outputLength={} sourceCount={}",
                     model.id,
@@ -108,8 +111,10 @@ class AgentGenerateMessagePortImpl private constructor(
         }
 
     private suspend fun prepareGeneration(
-        command: GenerateMessageCommand
+        command: GenerateMessageCommand,
+        onStatus: suspend (GenerateMessageStreamStatus) -> Unit = {}
     ): Either<InfrastructureError, PreparedGeneration> = either {
+        onStatus(GenerateMessageStreamStatus("thinking", "Preparing your request..."))
         val validMessages = command.messages
             .validateForMessageGeneration()
             .mapLeft { cause ->
@@ -122,12 +127,14 @@ class AgentGenerateMessagePortImpl private constructor(
 
         val latestUserText = validMessages.last().originalText
         val gtuSources = if (command.sources.gtu) {
+            onStatus(GenerateMessageStreamStatus("gtu_search", "Searching GTU knowledge base..."))
             knowledgeSearchTool.search(latestUserText)
                 .fold(ifLeft = { emptyList() }, ifRight = { it })
         } else {
             emptyList()
         }
         val materialSources = if (command.sources.materials) {
+            onStatus(GenerateMessageStreamStatus("materials_search", "Checking uploaded materials..."))
             userMaterialSearchTool.search(
                 ownerUserId = command.userId,
                 query = latestUserText,
@@ -141,6 +148,7 @@ class AgentGenerateMessagePortImpl private constructor(
         val shouldSearchWeb = command.sources.web &&
             (bestLocalScore == null || bestLocalScore < MIN_RAG_CONFIDENCE || latestUserText.isTimeSensitive())
         val webSources = if (shouldSearchWeb) {
+            onStatus(GenerateMessageStreamStatus("web_search", "Searching web sources..."))
             webSearchTool.search(latestUserText)
                 .fold(ifLeft = { emptyList() }, ifRight = { it })
         } else {
@@ -149,9 +157,13 @@ class AgentGenerateMessagePortImpl private constructor(
         val sources = command.sources.combineSources(gtuSources, materialSources, webSources)
             .distinctBy { it.url to it.snippet }
             .take(MAX_SOURCES)
+        if (artifactService != null) {
+            onStatus(GenerateMessageStreamStatus("artifact_check", "Checking whether an artifact is needed..."))
+        }
         val artifactGeneration = artifactService
             ?.maybeCreateArtifact(command.userId, latestUserText)
             ?.bind()
+        onStatus(GenerateMessageStreamStatus("context_ready", "Context ready. Preparing answer..."))
 
         logger.info(
             "AI context prepared sources={} gtuSources={} materialSources={} webSources={} selectedSources={}",
@@ -204,8 +216,10 @@ class AgentGenerateMessagePortImpl private constructor(
 
     private suspend fun executeLlmStream(
         preparedGeneration: PreparedGeneration,
-        onToken: suspend (String) -> Unit
+        onToken: suspend (String) -> Unit,
+        onStatus: suspend (GenerateMessageStreamStatus) -> Unit
     ): Either<InfrastructureError, String> = either {
+        onStatus(GenerateMessageStreamStatus("answering", "Writing answer..."))
         val systemContent = preparedGeneration.systemPrompt(SYSTEM_PROMPT)
         val messagesJson = buildJsonArray {
             addJsonObject {
@@ -249,9 +263,9 @@ class AgentGenerateMessagePortImpl private constructor(
                     if (line.startsWith("data: ")) {
                         val data = line.removePrefix("data: ").trim()
                         if (data == "[DONE]") break
-                        try {
+                        val content = try {
                             val json = Json.parseToJsonElement(data).jsonObject
-                            val content = json["choices"]
+                            json["choices"]
                                 ?.jsonArray
                                 ?.firstOrNull()
                                 ?.jsonObject
@@ -260,19 +274,25 @@ class AgentGenerateMessagePortImpl private constructor(
                                 ?.get("content")
                                 ?.jsonPrimitive
                                 ?.content ?: ""
-                            if (content.isNotEmpty()) {
-                                streamedChunks += 1
-                                onToken(content)
-                                textBuilder.append(content)
-                            }
                         } catch (error: Exception) {
                             logger.warn("AI stream chunk parse failed model={} data={}", model.id, data, error)
+                            ""
+                        }
+
+                        if (content.isNotEmpty()) {
+                            streamedChunks += 1
+                            onToken(content)
+                            textBuilder.append(content)
                         }
                     }
                 }
             }
         }.mapLeft { cause ->
-            logger.warn("AI stream request failed model={} url={} apiKeyIndex={}", model.id, streamUrl, selectedApiKey.index, cause)
+            if (cause is ClosedWriteChannelException) {
+                logger.info("AI stream delivery cancelled model={} streamedChunks={} reason=client_disconnected", model.id, streamedChunks)
+            } else {
+                logger.warn("AI stream request failed model={} url={} apiKeyIndex={}", model.id, streamUrl, selectedApiKey.index, cause)
+            }
             InfrastructureError(cause)
         }.bind()
 

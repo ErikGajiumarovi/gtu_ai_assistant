@@ -4,6 +4,7 @@ import arrow.core.Either
 import com.gtu.aiassistant.domain.chat.model.Chat
 import com.gtu.aiassistant.domain.chat.model.ChatSources
 import com.gtu.aiassistant.domain.chat.model.Message
+import com.gtu.aiassistant.domain.chat.port.output.GenerateMessageStreamStatus
 import com.gtu.aiassistant.domain.materials.model.MaterialCollectionId
 import com.gtu.aiassistant.domain.materials.model.MaterialDocumentId
 import com.gtu.aiassistant.domain.model.DomainError
@@ -14,7 +15,8 @@ interface CreateChatWithAgentUseCase {
     suspend operator fun invoke(command: CreateChatWithAgentCommand): Either<CreateChatWithAgentError, CreateChatWithAgentResult>
     suspend fun stream(
         command: CreateChatWithAgentCommand,
-        onToken: suspend (String) -> Unit
+        onToken: suspend (String) -> Unit,
+        onStatus: suspend (GenerateMessageStreamStatus) -> Unit = {}
     ): Either<CreateChatWithAgentError, CreateChatWithAgentResult>
 }
 

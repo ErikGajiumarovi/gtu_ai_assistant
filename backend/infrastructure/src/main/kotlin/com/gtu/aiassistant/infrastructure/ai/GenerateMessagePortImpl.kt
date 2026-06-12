@@ -15,6 +15,7 @@ import ai.koog.prompt.message.Message as KoogMessage
 import com.gtu.aiassistant.domain.chat.model.MessageSenderType
 import com.gtu.aiassistant.domain.chat.port.output.GenerateMessageCommand
 import com.gtu.aiassistant.domain.chat.port.output.GenerateMessagePort
+import com.gtu.aiassistant.domain.chat.port.output.GenerateMessageStreamStatus
 import com.gtu.aiassistant.domain.chat.port.output.validateForMessageGeneration
 import com.gtu.aiassistant.domain.model.InfrastructureError
 import io.ktor.client.HttpClient
@@ -41,11 +42,13 @@ class GenerateMessagePortImpl private constructor(
 
     override suspend fun stream(
         command: GenerateMessageCommand,
-        onToken: suspend (String) -> Unit
+        onToken: suspend (String) -> Unit,
+        onStatus: suspend (GenerateMessageStreamStatus) -> Unit
     ): Either<InfrastructureError, DomainMessage> =
         withContext(Dispatchers.IO) {
             either {
                 val validMessages = commonValidate(command.messages).bind()
+                onStatus(GenerateMessageStreamStatus("answering", "Writing answer..."))
                 val generatedText = commonExecute(validMessages).bind()
 
                 val words = generatedText.split(" ")

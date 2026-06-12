@@ -8,6 +8,7 @@ import com.gtu.aiassistant.domain.chat.model.ChatSources
 import com.gtu.aiassistant.domain.chat.model.Message
 import com.gtu.aiassistant.domain.chat.model.MessageCitationSourceType
 import com.gtu.aiassistant.domain.chat.model.MessageSenderType
+import com.gtu.aiassistant.domain.chat.port.output.GenerateMessageStreamStatus
 import com.gtu.aiassistant.domain.materials.model.MaterialCollectionId
 import com.gtu.aiassistant.domain.materials.model.MaterialCollection
 import com.gtu.aiassistant.domain.materials.model.MaterialDocument
@@ -39,15 +40,24 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
+import io.ktor.utils.io.ClosedWriteChannelException
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.io.Writer
 import java.time.Instant
 import java.util.UUID
 import io.ktor.utils.io.toByteArray
 import org.slf4j.LoggerFactory
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 private val ndjsonJson = Json { encodeDefaults = false }
 private val routesLogger = LoggerFactory.getLogger("com.gtu.aiassistant.presentation.ApiRoutes")
+private const val STREAM_HEARTBEAT_PACKET = "{\"h\":true}\n"
+private const val STREAM_HEARTBEAT_INTERVAL_MS = 5_000L
 
 internal fun Application.configureRoutes(
     dependencies: ApiDependencies
@@ -184,34 +194,83 @@ internal fun Application.configureRoutes(
                             },
                             ifRight = { command ->
                                 var tokenCount = 0
-                                dependencies.createChatWithAgentUseCase.stream(command) { token ->
-                                    tokenCount += 1
-                                    write("{\"t\":${Json.encodeToString(token)}}\n")
-                                    flush()
-                                }.fold(
-                                    ifLeft = { error ->
-                                        routesLogger.warn(
-                                            "create chat stream failed userId={} tokens={} error={}",
-                                            principal.userId.value,
-                                            tokenCount,
-                                            error
-                                        )
-                                        write("{\"e\":${Json.encodeToString(error.toString())}}\n")
-                                        flush()
-                                    },
-                                    ifRight = { result ->
-                                        routesLogger.info(
-                                            "create chat stream succeeded userId={} chatId={} tokens={} messageCount={}",
-                                            principal.userId.value,
-                                            result.chat.id.value,
-                                            tokenCount,
-                                            result.chat.messages.size
-                                        )
-                                        val finalJson = buildChatFinalJson(result.chat.toResponse())
-                                        write("{\"d\":$finalJson}\n")
-                                        flush()
+                                var clientDisconnected = false
+                                val writeLock = ReentrantLock()
+                                fun writePacket(packet: String) = writeNdjsonPacket(packet, writeLock)
+
+                                coroutineScope {
+                                    val heartbeatJob = launch {
+                                        while (true) {
+                                            delay(STREAM_HEARTBEAT_INTERVAL_MS)
+                                            try {
+                                                writePacket(STREAM_HEARTBEAT_PACKET)
+                                            } catch (error: ClosedWriteChannelException) {
+                                                clientDisconnected = true
+                                                throw error
+                                            }
+                                        }
                                     }
-                                )
+                                    try {
+                                        writePacket(STREAM_HEARTBEAT_PACKET)
+                                        dependencies.createChatWithAgentUseCase.stream(
+                                            command = command,
+                                            onToken = { token ->
+                                                tokenCount += 1
+                                                try {
+                                                    writePacket("{\"t\":${Json.encodeToString(token)}}\n")
+                                                } catch (error: ClosedWriteChannelException) {
+                                                    clientDisconnected = true
+                                                    throw error
+                                                }
+                                            },
+                                            onStatus = { status ->
+                                                try {
+                                                    writePacket(buildStreamStatusJson(status))
+                                                } catch (error: ClosedWriteChannelException) {
+                                                    clientDisconnected = true
+                                                    throw error
+                                                }
+                                            }
+                                        ).fold(
+                                            ifLeft = { error ->
+                                                if (clientDisconnected) {
+                                                    routesLogger.info(
+                                                        "create chat stream cancelled userId={} tokens={} reason=client_disconnected",
+                                                        principal.userId.value,
+                                                        tokenCount
+                                                    )
+                                                } else {
+                                                    routesLogger.warn(
+                                                        "create chat stream failed userId={} tokens={} error={}",
+                                                        principal.userId.value,
+                                                        tokenCount,
+                                                        error
+                                                    )
+                                                    writePacket("{\"e\":${Json.encodeToString(error.toString())}}\n")
+                                                }
+                                            },
+                                            ifRight = { result ->
+                                                routesLogger.info(
+                                                    "create chat stream succeeded userId={} chatId={} tokens={} messageCount={}",
+                                                    principal.userId.value,
+                                                    result.chat.id.value,
+                                                    tokenCount,
+                                                    result.chat.messages.size
+                                                )
+                                                val finalJson = buildChatFinalJson(result.chat.toResponse())
+                                                writePacket("{\"d\":$finalJson}\n")
+                                            }
+                                        )
+                                    } catch (_: ClosedWriteChannelException) {
+                                        routesLogger.info(
+                                            "create chat stream cancelled userId={} tokens={} reason=client_disconnected",
+                                            principal.userId.value,
+                                            tokenCount
+                                        )
+                                    } finally {
+                                        heartbeatJob.cancel()
+                                    }
+                                }
                             }
                         )
                     }
@@ -337,35 +396,86 @@ internal fun Application.configureRoutes(
                             },
                             ifRight = { command ->
                                 var tokenCount = 0
-                                dependencies.continueChatWithAgentUseCase.stream(command) { token ->
-                                    tokenCount += 1
-                                    write("{\"t\":${Json.encodeToString(token)}}\n")
-                                    flush()
-                                }.fold(
-                                    ifLeft = { error ->
-                                        routesLogger.warn(
-                                            "continue chat stream failed userId={} chatId={} tokens={} error={}",
-                                            principal.userId.value,
-                                            chatIdRaw,
-                                            tokenCount,
-                                            error
-                                        )
-                                        write("{\"e\":${Json.encodeToString(error.toString())}}\n")
-                                        flush()
-                                    },
-                                    ifRight = { result ->
-                                        routesLogger.info(
-                                            "continue chat stream succeeded userId={} chatId={} tokens={} messageCount={}",
-                                            principal.userId.value,
-                                            chatIdRaw,
-                                            tokenCount,
-                                            result.chat.messages.size
-                                        )
-                                        val finalJson = buildChatFinalJson(result.chat.toResponse())
-                                        write("{\"d\":$finalJson}\n")
-                                        flush()
+                                var clientDisconnected = false
+                                val writeLock = ReentrantLock()
+                                fun writePacket(packet: String) = writeNdjsonPacket(packet, writeLock)
+
+                                coroutineScope {
+                                    val heartbeatJob = launch {
+                                        while (true) {
+                                            delay(STREAM_HEARTBEAT_INTERVAL_MS)
+                                            try {
+                                                writePacket(STREAM_HEARTBEAT_PACKET)
+                                            } catch (error: ClosedWriteChannelException) {
+                                                clientDisconnected = true
+                                                throw error
+                                            }
+                                        }
                                     }
-                                )
+                                    try {
+                                        writePacket(STREAM_HEARTBEAT_PACKET)
+                                        dependencies.continueChatWithAgentUseCase.stream(
+                                            command = command,
+                                            onToken = { token ->
+                                                tokenCount += 1
+                                                try {
+                                                    writePacket("{\"t\":${Json.encodeToString(token)}}\n")
+                                                } catch (error: ClosedWriteChannelException) {
+                                                    clientDisconnected = true
+                                                    throw error
+                                                }
+                                            },
+                                            onStatus = { status ->
+                                                try {
+                                                    writePacket(buildStreamStatusJson(status))
+                                                } catch (error: ClosedWriteChannelException) {
+                                                    clientDisconnected = true
+                                                    throw error
+                                                }
+                                            }
+                                        ).fold(
+                                            ifLeft = { error ->
+                                                if (clientDisconnected) {
+                                                    routesLogger.info(
+                                                        "continue chat stream cancelled userId={} chatId={} tokens={} reason=client_disconnected",
+                                                        principal.userId.value,
+                                                        chatIdRaw,
+                                                        tokenCount
+                                                    )
+                                                } else {
+                                                    routesLogger.warn(
+                                                        "continue chat stream failed userId={} chatId={} tokens={} error={}",
+                                                        principal.userId.value,
+                                                        chatIdRaw,
+                                                        tokenCount,
+                                                        error
+                                                    )
+                                                    writePacket("{\"e\":${Json.encodeToString(error.toString())}}\n")
+                                                }
+                                            },
+                                            ifRight = { result ->
+                                                routesLogger.info(
+                                                    "continue chat stream succeeded userId={} chatId={} tokens={} messageCount={}",
+                                                    principal.userId.value,
+                                                    chatIdRaw,
+                                                    tokenCount,
+                                                    result.chat.messages.size
+                                                )
+                                                val finalJson = buildChatFinalJson(result.chat.toResponse())
+                                                writePacket("{\"d\":$finalJson}\n")
+                                            }
+                                        )
+                                    } catch (_: ClosedWriteChannelException) {
+                                        routesLogger.info(
+                                            "continue chat stream cancelled userId={} chatId={} tokens={} reason=client_disconnected",
+                                            principal.userId.value,
+                                            chatIdRaw,
+                                            tokenCount
+                                        )
+                                    } finally {
+                                        heartbeatJob.cancel()
+                                    }
+                                }
                             }
                         )
                     }
@@ -916,6 +1026,16 @@ private fun com.gtu.aiassistant.domain.chat.model.MessageCitation.toResponseUrl(
 
 private fun buildChatFinalJson(response: ChatResponse): String =
     ndjsonJson.encodeToString(response)
+
+private fun buildStreamStatusJson(status: GenerateMessageStreamStatus): String =
+    "{\"s\":{\"phase\":${Json.encodeToString(status.phase)},\"message\":${Json.encodeToString(status.message)}}}\n"
+
+private fun Writer.writeNdjsonPacket(packet: String, lock: ReentrantLock) {
+    lock.withLock {
+        write(packet)
+        flush()
+    }
+}
 
 private fun com.gtu.aiassistant.domain.user.port.input.RegisterUserError.statusCode(): HttpStatusCode =
     when (this) {

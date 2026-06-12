@@ -31,7 +31,7 @@ import {
   streamPaths,
   uploadMaterial
 } from "./api/client";
-import { streamChat } from "./api/stream";
+import { streamChat, type StreamStatus } from "./api/stream";
 import type {
   AgentSources,
   ArtifactResponse,
@@ -68,6 +68,7 @@ export function App() {
   const [uploadCollectionId, setUploadCollectionId] = useState<string | null>(null);
   const [pendingUserText, setPendingUserText] = useState("");
   const [streamingText, setStreamingText] = useState("");
+  const [agentStatus, setAgentStatus] = useState<StreamStatus | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const streamAbortRef = useRef<AbortController | null>(null);
@@ -131,6 +132,7 @@ export function App() {
       setSelectedChatId("");
       setPendingUserText("");
       setStreamingText("");
+      setAgentStatus(null);
       setSelectedDocumentIds(new Set());
       setSelectedCollectionIds(new Set());
       setUploadCollectionId(null);
@@ -153,6 +155,7 @@ export function App() {
     streamAbortRef.current = abortController;
     setPendingUserText(trimmed);
     setStreamingText("");
+    setAgentStatus({ phase: "thinking", message: "Thinking..." });
     setIsStreaming(true);
     setNotice(null);
 
@@ -168,7 +171,11 @@ export function App() {
         selectedChat ? streamPaths.continue(selectedChat.id) : streamPaths.create,
         payload,
         {
-          onToken: (token) => setStreamingText((current) => current + token),
+          onToken: (token) => {
+            setAgentStatus(null);
+            setStreamingText((current) => current + token);
+          },
+          onStatus: setAgentStatus,
           onDone: (chat) => {
             queryClient.setQueryData<ChatResponse[]>(["chats", session?.jwt], (current = []) =>
               sortChats([chat, ...current.filter((item) => item.id !== chat.id)])
@@ -181,12 +188,14 @@ export function App() {
 
       setPendingUserText("");
       setStreamingText("");
+      setAgentStatus(null);
     } catch (error) {
       if (!abortController.signal.aborted) {
         showError("Response failed", error, setNotice);
       }
     } finally {
       if (streamAbortRef.current === abortController) streamAbortRef.current = null;
+      setAgentStatus(null);
       setIsStreaming(false);
     }
   }
@@ -245,6 +254,7 @@ export function App() {
           setSelectedChatId("");
           setPendingUserText("");
           setStreamingText("");
+          setAgentStatus(null);
           setChatSearch("");
           setNotice(null);
           setSidebarOpen(false);
@@ -275,6 +285,7 @@ export function App() {
         selectedChat={selectedChat}
         isStreaming={isStreaming}
         streamingText={streamingText}
+        agentStatus={agentStatus}
         pendingUserText={pendingUserText}
         selectedSources={selectedSources}
         selectedDocumentCount={selectedDocumentIds.size}
@@ -703,6 +714,7 @@ function ChatScreen({
   selectedChat,
   isStreaming,
   streamingText,
+  agentStatus,
   pendingUserText,
   selectedSources,
   selectedDocumentCount,
@@ -717,6 +729,7 @@ function ChatScreen({
   selectedChat: ChatResponse | null;
   isStreaming: boolean;
   streamingText: string;
+  agentStatus: StreamStatus | null;
   pendingUserText: string;
   selectedSources: AgentSources;
   selectedDocumentCount: number;
@@ -736,7 +749,7 @@ function ChatScreen({
 
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ block: "end" });
-  }, [selectedChat?.id, streamingText, pendingUserText]);
+  }, [selectedChat?.id, streamingText, pendingUserText, agentStatus?.message]);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -770,7 +783,7 @@ function ChatScreen({
             />
           ))}
           {pendingUserText && <MessageBubble text={pendingUserText} isUser time="" />}
-          {isStreaming && <MessageBubble text={streamingText} isUser={false} time="" isStreaming />}
+          {isStreaming && <MessageBubble text={streamingText} isUser={false} time="" isStreaming status={agentStatus} />}
           <div ref={scrollRef} />
         </div>
       </section>
@@ -833,6 +846,7 @@ function MessageBubble({
   citations = [],
   artifacts = [],
   isStreaming = false,
+  status = null,
   onOpenMaterialCitation = () => undefined
 }: {
   text: string;
@@ -841,8 +855,11 @@ function MessageBubble({
   citations?: CitationResponse[];
   artifacts?: ArtifactResponse[];
   isStreaming?: boolean;
+  status?: StreamStatus | null;
   onOpenMaterialCitation?: (url: string) => void;
 }) {
+  const visibleStatus = isStreaming && !text ? status : null;
+
   return (
     <article className={`message-row ${isUser ? "user" : "assistant"}`}>
       <div className="message-bubble">
@@ -853,30 +870,43 @@ function MessageBubble({
           </p>
         ) : (
           <div className="markdown-content">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                a: ({ node: _node, href, ...props }) => {
-                  const isAuthenticatedUrl = href ? isAuthenticatedApiUrl(href) : false;
-                  return (
-                    <a
-                      {...props}
-                      href={href}
-                      target="_blank"
-                      rel="noreferrer"
-                      onClick={(event) => {
-                        if (!href || !isAuthenticatedUrl) return;
-                        event.preventDefault();
-                        onOpenMaterialCitation(href);
-                      }}
-                    />
-                  );
-                }
-              }}
-            >
-              {text || (isStreaming ? "" : " ")}
-            </ReactMarkdown>
-            {isStreaming && <span className="cursor">|</span>}
+            {visibleStatus ? (
+              <div className="agent-status" data-phase={visibleStatus.phase}>
+                <span className="agent-status-dots" aria-hidden="true">
+                  <span />
+                  <span />
+                  <span />
+                </span>
+                <span>{visibleStatus.message}</span>
+              </div>
+            ) : (
+              <>
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    a: ({ node: _node, href, ...props }) => {
+                      const isAuthenticatedUrl = href ? isAuthenticatedApiUrl(href) : false;
+                      return (
+                        <a
+                          {...props}
+                          href={href}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={(event) => {
+                            if (!href || !isAuthenticatedUrl) return;
+                            event.preventDefault();
+                            onOpenMaterialCitation(href);
+                          }}
+                        />
+                      );
+                    }
+                  }}
+                >
+                  {text || (isStreaming ? "" : " ")}
+                </ReactMarkdown>
+                {isStreaming && <span className="cursor">|</span>}
+              </>
+            )}
           </div>
         )}
         {!isUser && citations.length > 0 && (

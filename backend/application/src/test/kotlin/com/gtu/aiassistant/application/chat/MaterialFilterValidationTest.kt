@@ -65,6 +65,7 @@ private fun GenerateMessagePort(handler: TestGenerateMessageHandler): GenerateMe
 
     override suspend fun stream(
         command: GenerateMessageCommand,
-        onToken: suspend (String) -> Unit
+        onToken: suspend (String) -> Unit,
+        onStatus: suspend (com.gtu.aiassistant.domain.chat.port.output.GenerateMessageStreamStatus) -> Unit
     ): Either<InfrastructureError, Message> = handler.invoke(command)
 }

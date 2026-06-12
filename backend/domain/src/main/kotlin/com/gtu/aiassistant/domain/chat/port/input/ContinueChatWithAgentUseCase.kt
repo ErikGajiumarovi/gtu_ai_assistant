@@ -5,6 +5,7 @@ import com.gtu.aiassistant.domain.chat.model.Chat
 import com.gtu.aiassistant.domain.chat.model.ChatId
 import com.gtu.aiassistant.domain.chat.model.ChatSources
 import com.gtu.aiassistant.domain.chat.model.Message
+import com.gtu.aiassistant.domain.chat.port.output.GenerateMessageStreamStatus
 import com.gtu.aiassistant.domain.materials.model.MaterialCollectionId
 import com.gtu.aiassistant.domain.materials.model.MaterialDocumentId
 import com.gtu.aiassistant.domain.model.DomainError
@@ -15,7 +16,8 @@ interface ContinueChatWithAgentUseCase {
     suspend operator fun invoke(command: ContinueChatWithAgentCommand): Either<ContinueChatWithAgentError, ContinueChatWithAgentResult>
     suspend fun stream(
         command: ContinueChatWithAgentCommand,
-        onToken: suspend (String) -> Unit
+        onToken: suspend (String) -> Unit,
+        onStatus: suspend (GenerateMessageStreamStatus) -> Unit = {}
     ): Either<ContinueChatWithAgentError, ContinueChatWithAgentResult>
 }
 

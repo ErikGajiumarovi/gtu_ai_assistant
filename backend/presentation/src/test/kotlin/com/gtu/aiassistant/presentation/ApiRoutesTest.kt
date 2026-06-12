@@ -248,6 +248,7 @@ class ApiRoutesTest {
         createMaterialCollectionUseCase = createMaterialCollectionUseCase,
         listMaterialCollectionsUseCase = listMaterialCollectionsUseCase,
         deleteMaterialCollectionUseCase = deleteMaterialCollectionUseCase,
+        readGeneratedArtifactContentPort = { arrow.core.Either.Right(null) },
         jwtSecret = jwtSecret,
         jwtIssuer = jwtIssuer
     )
@@ -268,7 +269,8 @@ private fun createChatUseCase(
 
     override suspend fun stream(
         command: CreateChatWithAgentCommand,
-        onToken: suspend (String) -> Unit
+        onToken: suspend (String) -> Unit,
+        onStatus: suspend (com.gtu.aiassistant.domain.chat.port.output.GenerateMessageStreamStatus) -> Unit
     ) = handler(command)
 }
 
@@ -279,7 +281,8 @@ private fun continueChatUseCase(
 
     override suspend fun stream(
         command: ContinueChatWithAgentCommand,
-        onToken: suspend (String) -> Unit
+        onToken: suspend (String) -> Unit,
+        onStatus: suspend (com.gtu.aiassistant.domain.chat.port.output.GenerateMessageStreamStatus) -> Unit
     ) = handler(command)
 }
 
