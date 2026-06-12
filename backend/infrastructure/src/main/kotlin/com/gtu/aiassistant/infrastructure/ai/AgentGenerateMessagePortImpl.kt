@@ -20,6 +20,7 @@ import com.gtu.aiassistant.domain.chat.port.output.GenerateMessagePort
 import com.gtu.aiassistant.domain.chat.port.output.GenerateMessageStreamStatus
 import com.gtu.aiassistant.domain.chat.port.output.validateForMessageGeneration
 import com.gtu.aiassistant.domain.model.InfrastructureError
+import com.gtu.aiassistant.domain.user.model.UserId
 import com.gtu.aiassistant.infrastructure.ai.tools.AgentSource
 import com.gtu.aiassistant.infrastructure.ai.tools.GtuKnowledgeSearchTool
 import com.gtu.aiassistant.infrastructure.ai.tools.GtuWebSearchTool
@@ -68,16 +69,18 @@ class AgentGenerateMessagePortImpl private constructor(
                     command.documentIds.size
                 )
                 val preparedGeneration = prepareGeneration(command).bind()
-                val generatedText = executeLlm(preparedGeneration).bind()
+                val artifactGeneration = createArtifactGeneration(preparedGeneration).bind()
+                val finalGeneration = preparedGeneration.copy(artifactGeneration = artifactGeneration)
+                val generatedText = executeLlm(finalGeneration).bind()
                 logger.info(
                     "AI generation completed model={} outputLength={} sourceCount={}",
                     model.id,
                     generatedText.length,
-                    preparedGeneration.sources.size
+                    finalGeneration.sources.size
                 )
-                val validMessages = preparedGeneration.validMessages
-                val sources = preparedGeneration.sources
-                buildDomainMessage(validMessages, sources, generatedText, preparedGeneration.artifactGeneration)
+                val validMessages = finalGeneration.validMessages
+                val sources = finalGeneration.sources
+                buildDomainMessage(validMessages, sources, generatedText, finalGeneration.artifactGeneration)
             }
         }
 
@@ -97,16 +100,18 @@ class AgentGenerateMessagePortImpl private constructor(
                     command.documentIds.size
                 )
                 val preparedGeneration = prepareGeneration(command, onStatus).bind()
-                val generatedText = executeLlmStream(preparedGeneration, onToken, onStatus).bind()
+                val artifactGeneration = createArtifactGeneration(preparedGeneration, onStatus).bind()
+                val finalGeneration = preparedGeneration.copy(artifactGeneration = artifactGeneration)
+                val generatedText = executeLlmStream(finalGeneration, onToken, onStatus).bind()
                 logger.info(
                     "AI stream generation completed model={} outputLength={} sourceCount={}",
                     model.id,
                     generatedText.length,
-                    preparedGeneration.sources.size
+                    finalGeneration.sources.size
                 )
-                val validMessages = preparedGeneration.validMessages
-                val sources = preparedGeneration.sources
-                buildDomainMessage(validMessages, sources, generatedText, preparedGeneration.artifactGeneration)
+                val validMessages = finalGeneration.validMessages
+                val sources = finalGeneration.sources
+                buildDomainMessage(validMessages, sources, generatedText, finalGeneration.artifactGeneration)
             }
         }
 
@@ -157,12 +162,10 @@ class AgentGenerateMessagePortImpl private constructor(
         val sources = command.sources.combineSources(gtuSources, materialSources, webSources)
             .distinctBy { it.url to it.snippet }
             .take(MAX_SOURCES)
-        if (artifactService != null) {
-            onStatus(GenerateMessageStreamStatus("artifact_check", "Checking whether an artifact is needed..."))
+        val artifactIntent = artifactService?.detectIntent(latestUserText)
+        if (artifactIntent != null) {
+            onStatus(GenerateMessageStreamStatus("artifact_check", "Checking requested artifact..."))
         }
-        val artifactGeneration = artifactService
-            ?.maybeCreateArtifact(command.userId, latestUserText)
-            ?.bind()
         onStatus(GenerateMessageStreamStatus("context_ready", "Context ready. Preparing answer..."))
 
         logger.info(
@@ -176,10 +179,66 @@ class AgentGenerateMessagePortImpl private constructor(
 
         PreparedGeneration(
             validMessages = validMessages,
+            userId = command.userId,
             sourceSelection = command.sources,
             sources = sources,
-            artifactGeneration = artifactGeneration
+            artifactIntent = artifactIntent,
+            artifactGeneration = null
         )
+    }
+
+    private suspend fun createArtifactGeneration(
+        preparedGeneration: PreparedGeneration,
+        onStatus: suspend (GenerateMessageStreamStatus) -> Unit = {}
+    ): Either<InfrastructureError, ArtifactGenerationResult?> = either {
+        val service = artifactService ?: return@either null
+        val intent = preparedGeneration.artifactIntent ?: return@either null
+        val draft = if (intent.needsDraft) {
+            onStatus(GenerateMessageStreamStatus("drafting_document", "Writing artifact content..."))
+            executeArtifactDraft(preparedGeneration, intent).bind()
+        } else {
+            null
+        }
+        onStatus(GenerateMessageStreamStatus("creating_artifact", "Creating downloadable artifact..."))
+        service.createArtifact(
+            userId = preparedGeneration.userId,
+            intent = intent,
+            draft = draft
+        ).bind()
+    }
+
+    private suspend fun executeArtifactDraft(
+        preparedGeneration: PreparedGeneration,
+        intent: ArtifactIntent
+    ): Either<InfrastructureError, ArtifactDraft> = either {
+        val llmPrompt = prompt("generate-gtu-artifact-draft") {
+            system(preparedGeneration.artifactDraftPrompt(intent))
+            preparedGeneration.validMessages.takeLast(MAX_HISTORY_MESSAGES).forEach { message ->
+                when (message.senderType) {
+                    MessageSenderType.USER -> user(message.originalText)
+                    MessageSenderType.AI -> assistant(message.originalText)
+                }
+            }
+        }
+
+        val selectedApiKey = apiKeySelector.next()
+        val rawResponse = Either.catch {
+            executors[selectedApiKey.index].execute(llmPrompt, model)
+        }.mapLeft(::InfrastructureError).bind()
+
+        val markdown = Either.catch {
+            rawResponse.assistantText()
+        }.mapLeft { cause ->
+            logger.warn("AI artifact draft response could not be parsed model={} response={}", model.id, rawResponse, cause)
+            InfrastructureError(cause)
+        }.bind().trim().removeMarkdownFence()
+
+        ensure(markdown.isNotBlank()) {
+            logger.warn("AI artifact draft returned blank text model={} response={}", model.id, rawResponse)
+            InfrastructureError(cause = IllegalStateException("LLM artifact draft is blank"))
+        }
+
+        ArtifactDraft.fromMarkdown(markdown, fallbackTitle = intent.defaultTitle())
     }
 
     private suspend fun executeLlm(
@@ -369,6 +428,7 @@ class AgentGenerateMessagePortImpl private constructor(
         private const val SYSTEM_PROMPT: String =
             """
             You are the GTU AI Assistant for students of Georgian Technical University.
+            In this application, GTU always means Georgian Technical University in Georgia. Never reinterpret GTU as Gujarat Technological University or any other institution.
             Your main task is to help with university-related information: admissions, faculties, services, schedules, scholarships, exchange programs, rules, contacts, and public student resources.
             Answer in the user's language.
 
@@ -447,12 +507,33 @@ private fun List<KoogMessage.Response>.assistantText(): String =
 
 private data class PreparedGeneration(
     val validMessages: List<DomainMessage>,
+    val userId: UserId,
     val sourceSelection: ChatSources,
     val sources: List<AgentSource>,
+    val artifactIntent: ArtifactIntent?,
     val artifactGeneration: ArtifactGenerationResult?
 ) {
     fun systemPrompt(basePrompt: String): String =
         basePrompt + "\n\n" + sourceSelection.promptRules() + "\n\n" + sources.toContextBlock() + artifactGeneration.toContextBlock()
+
+    fun artifactDraftPrompt(intent: ArtifactIntent): String =
+        """
+        You are a document-writing sub-agent for GTU AI Assistant.
+        In this application, GTU always means Georgian Technical University in Georgia. Never reinterpret GTU as Gujarat Technological University or any other institution.
+        Your task is to write the complete content for a downloadable ${intent.kind.name} artifact.
+        Return Markdown only. Do not wrap it in code fences. Do not mention download links.
+        Write in the user's language and satisfy the latest user request as a finished document, not as instructions.
+
+        Latest user request:
+        ${validMessages.last().originalText}
+
+        Grounding rules:
+        ${sourceSelection.promptRules()}
+        For factual claims about GTU, rely only on the allowed source context below. If the context is insufficient, include a clear note that the information could not be fully confirmed from the allowed sources.
+        Do not invent deadlines, prices, contacts, rules, or personal student data.
+
+        ${sources.toContextBlock()}
+        """.trimIndent()
 }
 
 private fun ArtifactGenerationResult?.toContextBlock(): String =
@@ -461,6 +542,25 @@ private fun ArtifactGenerationResult?.toContextBlock(): String =
     } else {
         "\n\nArtifact context:\n$context\nMention the generated artifact links in the final answer."
     }
+
+private fun ArtifactIntent.defaultTitle(): String =
+    when (kind) {
+        ArtifactKind.DOCX -> "GTU Document"
+        ArtifactKind.HTML -> "GTU Page"
+        ArtifactKind.TEXT -> "GTU Assistant Output"
+        ArtifactKind.CHART -> "Generated Chart"
+    }
+
+private fun String.removeMarkdownFence(): String {
+    val trimmed = trim()
+    if (!trimmed.startsWith("```")) return trimmed
+    return trimmed
+        .lines()
+        .drop(1)
+        .dropLastWhile { it.trim() == "```" }
+        .joinToString("\n")
+        .trim()
+}
 
 private fun AiConfig.openAiChatCompletionsUrl(): String {
     val normalizedBaseUrl = baseUrl.trimEnd('/')

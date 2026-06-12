@@ -15,23 +15,26 @@ class AgentArtifactService(
     private val agentSpaceClient: AgentSpaceClient,
     private val storeGeneratedArtifactPort: StoreGeneratedArtifactPort
 ) {
-    suspend fun maybeCreateArtifact(
+    fun detectIntent(prompt: String): ArtifactIntent? =
+        ArtifactIntent.fromPrompt(prompt)
+
+    suspend fun createArtifact(
         userId: UserId,
-        prompt: String
+        intent: ArtifactIntent,
+        draft: ArtifactDraft?
     ): Either<InfrastructureError, ArtifactGenerationResult?> = either {
-        val request = ArtifactRequest.fromPrompt(prompt) ?: return@either null
-        val bytes = when (request.kind) {
-            ArtifactKind.TEXT -> request.textContent.toByteArray(StandardCharsets.UTF_8)
-            ArtifactKind.HTML -> request.htmlContent.toByteArray(StandardCharsets.UTF_8)
+        val bytes = when (intent.kind) {
+            ArtifactKind.TEXT -> requireDraft(intent, draft).markdown.toByteArray(StandardCharsets.UTF_8)
+            ArtifactKind.HTML -> requireDraft(intent, draft).toHtmlPage().toByteArray(StandardCharsets.UTF_8)
             ArtifactKind.DOCX, ArtifactKind.CHART -> {
                 val run = agentSpaceClient.runForArtifact(
                     mode = "python",
-                    code = request.pythonCode,
-                    artifactPath = request.artifactPath,
+                    code = intent.toPythonCode(draft),
+                    artifactPath = intent.artifactPath,
                     timeoutSeconds = 60
                 ).bind()
                 val artifact = run.artifacts.firstOrNull()
-                    ?: raise(InfrastructureError(IllegalStateException("agent_space did not return artifact ${request.artifactPath}")))
+                    ?: raise(InfrastructureError(IllegalStateException("agent_space did not return artifact ${intent.artifactPath}")))
                 Base64.getDecoder().decode(artifact.base64)
             }
         }
@@ -40,8 +43,8 @@ class AgentArtifactService(
                 ownerUserId = userId,
                 chatId = null,
                 messageId = null,
-                fileName = request.fileName,
-                contentType = request.contentType,
+                fileName = intent.fileName,
+                contentType = intent.contentType,
                 bytes = bytes
             )
         ).bind()
@@ -76,24 +79,44 @@ data class ArtifactGenerationResult(
     val context: String
 )
 
-private enum class ArtifactKind {
+data class ArtifactDraft(
+    val title: String,
+    val markdown: String
+) {
+    companion object {
+        fun fromMarkdown(markdown: String, fallbackTitle: String): ArtifactDraft {
+            val normalized = markdown.trim()
+            val title = normalized
+                .lineSequence()
+                .firstOrNull { it.trimStart().startsWith("# ") }
+                ?.trim()
+                ?.removePrefix("#")
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?: fallbackTitle
+            return ArtifactDraft(title = title, markdown = normalized)
+        }
+    }
+}
+
+enum class ArtifactKind {
     TEXT,
     HTML,
     DOCX,
     CHART
 }
 
-private data class ArtifactRequest(
+data class ArtifactIntent(
     val kind: ArtifactKind,
     val fileName: String,
     val contentType: String,
-    val textContent: String = "",
-    val htmlContent: String = "",
-    val pythonCode: String = "",
-    val artifactPath: String = ""
+    val artifactPath: String = "",
+    val originalPrompt: String = ""
 ) {
+    val needsDraft: Boolean = kind in setOf(ArtifactKind.TEXT, ArtifactKind.HTML, ArtifactKind.DOCX)
+
     companion object {
-        fun fromPrompt(prompt: String): ArtifactRequest? {
+        fun fromPrompt(prompt: String): ArtifactIntent? {
             val normalized = prompt.lowercase()
             val wantsArtifact = listOf(
                 "создай", "сделай", "сгенерируй", "нарисуй", "построй", "сохрани", "экспорт", "выгрузи", "подготовь", "покажи",
@@ -110,59 +133,117 @@ private data class ArtifactRequest(
             }
         }
 
-        private fun text(prompt: String): ArtifactRequest =
-            ArtifactRequest(
+        private fun text(prompt: String): ArtifactIntent =
+            ArtifactIntent(
                 kind = ArtifactKind.TEXT,
                 fileName = "assistant-output.md",
                 contentType = "text/markdown; charset=utf-8",
-                textContent = "# Assistant Output\n\n$prompt\n"
+                originalPrompt = prompt
             )
 
-        private fun html(prompt: String): ArtifactRequest =
-            ArtifactRequest(
+        private fun html(prompt: String): ArtifactIntent =
+            ArtifactIntent(
                 kind = ArtifactKind.HTML,
                 fileName = "assistant-page.html",
                 contentType = "text/html; charset=utf-8",
-                htmlContent = """
-                    <!doctype html>
-                    <html lang="en">
-                    <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Assistant Page</title>
-                    <style>body{font-family:system-ui,sans-serif;max-width:860px;margin:40px auto;padding:0 20px;line-height:1.5}pre{white-space:pre-wrap;background:#f5f5f5;padding:16px;border-radius:12px}</style></head>
-                    <body><h1>Assistant Page</h1><pre>${prompt.escapeHtml()}</pre></body></html>
-                """.trimIndent()
+                originalPrompt = prompt
             )
 
-        private fun docx(prompt: String): ArtifactRequest =
-            ArtifactRequest(
+        private fun docx(prompt: String): ArtifactIntent =
+            ArtifactIntent(
                 kind = ArtifactKind.DOCX,
                 fileName = "assistant-document.docx",
                 contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 artifactPath = "assistant-document.docx",
-                pythonCode = """
-                    from docx import Document
-                    from docx.shared import Pt
-
-                    document = Document()
-                    document.add_heading('Assistant Document', level=1)
-                    document.add_paragraph(${prompt.toPythonStringLiteral()})
-                    document.add_paragraph('Generated by GTU AI Assistant.')
-                    for paragraph in document.paragraphs:
-                        for run in paragraph.runs:
-                            run.font.name = 'Arial'
-                            run.font.size = Pt(11)
-                    document.save('assistant-document.docx')
-                """.trimIndent()
+                originalPrompt = prompt
             )
 
-        private fun chart(prompt: String): ArtifactRequest {
-            val numbers = Regex("-?\\d+(?:\\.\\d+)?").findAll(prompt).map { it.value }.take(12).toList()
-            val values = if (numbers.isEmpty()) listOf("4", "7", "3", "9", "6") else numbers
-            return ArtifactRequest(
+        private fun chart(prompt: String): ArtifactIntent =
+            ArtifactIntent(
                 kind = ArtifactKind.CHART,
                 fileName = "assistant-chart.png",
                 contentType = "image/png",
                 artifactPath = "assistant-chart.png",
-                pythonCode = """
+                originalPrompt = prompt
+            )
+    }
+
+    fun toPythonCode(draft: ArtifactDraft?): String =
+        when (kind) {
+            ArtifactKind.DOCX -> docxPythonCode(requireDraft(this, draft))
+            ArtifactKind.CHART -> chartPythonCode(originalPrompt)
+            ArtifactKind.TEXT, ArtifactKind.HTML -> error("${kind.name} artifacts do not need Python rendering")
+        }
+
+    private fun docxPythonCode(draft: ArtifactDraft): String =
+        """
+            import base64
+            from docx import Document
+            from docx.shared import Pt
+
+            title = base64.b64decode(${draft.title.toBase64PythonStringLiteral()}).decode('utf-8')
+            markdown = base64.b64decode(${draft.markdown.toBase64PythonStringLiteral()}).decode('utf-8')
+
+            document = Document()
+
+            def add_paragraph(text, style=None):
+                paragraph = document.add_paragraph(style=style)
+                paragraph.add_run(text)
+                return paragraph
+
+            def add_heading(text, level):
+                document.add_heading(text.strip(), level=level)
+
+            has_title = False
+            pending_paragraph = []
+
+            def flush_paragraph():
+                global pending_paragraph
+                if pending_paragraph:
+                    add_paragraph(' '.join(pending_paragraph).strip())
+                    pending_paragraph = []
+
+            for raw_line in markdown.splitlines():
+                line = raw_line.strip()
+                if not line:
+                    flush_paragraph()
+                    continue
+                if line.startswith('#'):
+                    flush_paragraph()
+                    level = min(len(line) - len(line.lstrip('#')), 4)
+                    text = line.lstrip('#').strip()
+                    if text:
+                        add_heading(text, level)
+                        has_title = has_title or level == 1
+                    continue
+                if line.startswith(('- ', '* ')):
+                    flush_paragraph()
+                    add_paragraph(line[2:].strip(), style='List Bullet')
+                    continue
+                numbered = line.split('. ', 1)
+                if len(numbered) == 2 and numbered[0].isdigit():
+                    flush_paragraph()
+                    add_paragraph(numbered[1].strip(), style='List Number')
+                    continue
+                pending_paragraph.append(line)
+
+            flush_paragraph()
+
+            if not has_title:
+                document.paragraphs[0].insert_paragraph_before(title, style='Title') if document.paragraphs else document.add_heading(title, level=1)
+
+            for paragraph in document.paragraphs:
+                for run in paragraph.runs:
+                    run.font.name = 'Arial'
+                    run.font.size = Pt(11)
+
+            document.save('assistant-document.docx')
+        """.trimIndent()
+
+    private fun chartPythonCode(prompt: String): String {
+        val numbers = Regex("-?\\d+(?:\\.\\d+)?").findAll(prompt).map { it.value }.take(12).toList()
+        val values = if (numbers.isEmpty()) listOf("4", "7", "3", "9", "6") else numbers
+        return """
                     import matplotlib
                     matplotlib.use('Agg')
                     import matplotlib.pyplot as plt
@@ -177,10 +258,33 @@ private data class ArtifactRequest(
                     plt.tight_layout()
                     plt.savefig('assistant-chart.png', dpi=160)
                 """.trimIndent()
-            )
-        }
     }
 }
+
+private fun requireDraft(intent: ArtifactIntent, draft: ArtifactDraft?): ArtifactDraft =
+    draft ?: error("${intent.kind.name} artifact requires generated draft content")
+
+private fun ArtifactDraft.toHtmlPage(): String =
+    """
+    <!doctype html>
+    <html lang="en">
+    <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title.escapeHtml()}</title>
+    <style>body{font-family:system-ui,sans-serif;max-width:860px;margin:40px auto;padding:0 20px;line-height:1.55;color:#172033}h1,h2,h3{line-height:1.2}pre{white-space:pre-wrap;background:#f5f5f5;padding:16px;border-radius:12px}</style></head>
+    <body>${markdown.toHtmlBody()}</body></html>
+    """.trimIndent()
+
+private fun String.toHtmlBody(): String =
+    lineSequence().joinToString("\n") { rawLine ->
+        val line = rawLine.trim()
+        when {
+            line.startsWith("# ") -> "<h1>${line.removePrefix("# ").escapeHtml()}</h1>"
+            line.startsWith("## ") -> "<h2>${line.removePrefix("## ").escapeHtml()}</h2>"
+            line.startsWith("### ") -> "<h3>${line.removePrefix("### ").escapeHtml()}</h3>"
+            line.startsWith("- ") -> "<p>&bull; ${line.removePrefix("- ").escapeHtml()}</p>"
+            line.isBlank() -> ""
+            else -> "<p>${line.escapeHtml()}</p>"
+        }
+    }
 
 private fun String.escapeHtml(): String =
     replace("&", "&amp;")
@@ -191,3 +295,6 @@ private fun String.escapeHtml(): String =
 
 private fun String.toPythonStringLiteral(): String =
     "'''" + replace("\\", "\\\\").replace("'''", "'\"'\"'") + "'''"
+
+private fun String.toBase64PythonStringLiteral(): String =
+    Base64.getEncoder().encodeToString(toByteArray(StandardCharsets.UTF_8)).toPythonStringLiteral()
