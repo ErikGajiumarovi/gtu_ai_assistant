@@ -284,6 +284,10 @@ export function App() {
         onSubmit={(text) => void handleSubmit(text)}
         onStop={() => streamAbortRef.current?.abort()}
         onOpenMaterialCitation={(url) => {
+          if (isAuthenticatedApiUrl(url)) {
+            void openAuthenticatedDownload(url).catch((error) => showError("Download failed", error, setNotice));
+            return;
+          }
           if (url.startsWith("http://") || url.startsWith("https://")) {
             window.open(url, "_blank", "noopener,noreferrer");
             return;
@@ -852,7 +856,22 @@ function MessageBubble({
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               components={{
-                a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />
+                a: ({ node: _node, href, ...props }) => {
+                  const isAuthenticatedUrl = href ? isAuthenticatedApiUrl(href) : false;
+                  return (
+                    <a
+                      {...props}
+                      href={href}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(event) => {
+                        if (!href || !isAuthenticatedUrl) return;
+                        event.preventDefault();
+                        onOpenMaterialCitation(href);
+                      }}
+                    />
+                  );
+                }
               }}
             >
               {text || (isStreaming ? "" : " ")}
@@ -869,14 +888,14 @@ function MessageBubble({
             ))}
           </div>
         )}
-        {!isUser && artifacts.length > 0 && <ArtifactList artifacts={artifacts} />}
+        {!isUser && artifacts.length > 0 && <ArtifactList artifacts={artifacts} onOpenArtifact={onOpenMaterialCitation} />}
         {time && <small className="message-time">{time}</small>}
       </div>
     </article>
   );
 }
 
-function ArtifactList({ artifacts }: { artifacts: ArtifactResponse[] }) {
+function ArtifactList({ artifacts, onOpenArtifact }: { artifacts: ArtifactResponse[]; onOpenArtifact: (url: string) => void }) {
   return (
     <div className="artifacts">
       {artifacts.map((artifact) => (
@@ -889,18 +908,27 @@ function ArtifactList({ artifacts }: { artifacts: ArtifactResponse[] }) {
           </div>
           <div className="artifact-actions">
             {artifact.viewUrl && (
-              <a href={artifact.viewUrl} target="_blank" rel="noreferrer">
+              <button type="button" onClick={() => onOpenArtifact(artifact.viewUrl!)}>
                 Open
-              </a>
+              </button>
             )}
-            <a href={artifact.downloadUrl} target="_blank" rel="noreferrer">
+            <button type="button" onClick={() => onOpenArtifact(artifact.downloadUrl)}>
               Download
-            </a>
+            </button>
           </div>
         </div>
       ))}
     </div>
   );
+}
+
+function isAuthenticatedApiUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url, window.location.href);
+    return parsed.origin === window.location.origin && (parsed.pathname.startsWith("/api/artifacts/") || parsed.pathname.startsWith("/api/materials/"));
+  } catch {
+    return url.startsWith("/api/artifacts/") || url.startsWith("/api/materials/");
+  }
 }
 
 function SourceModeSelector({

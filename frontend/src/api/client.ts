@@ -36,6 +36,10 @@ function authHeader(): HeadersInit {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+function apiUrl(pathOrUrl: string): string {
+  return pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://") ? pathOrUrl : `${API_BASE_URL}${pathOrUrl}`;
+}
+
 async function parseApiError(response: Response, defaultCode: string): Promise<ApiClientError> {
   const text = await response.text();
   try {
@@ -111,7 +115,7 @@ export function uploadMaterial(file: File, collectionId?: string | null): Promis
 }
 
 export async function openAuthenticatedDownload(url: string): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}${url}`, { headers: authHeader() });
+  const response = await fetch(apiUrl(url), { headers: authHeader() });
   if (!response.ok) {
     throw await parseApiError(response, "download_error");
   }

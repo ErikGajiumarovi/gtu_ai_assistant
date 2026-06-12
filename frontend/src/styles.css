@@ -719,7 +719,7 @@ button:not(:disabled) {
   gap: 8px;
 }
 
-.artifact-actions a {
+.artifact-actions button {
   padding: 5px 9px;
   border-radius: 999px;
   background: #111827;
