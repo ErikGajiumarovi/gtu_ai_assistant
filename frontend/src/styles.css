@@ -635,6 +635,65 @@ button:not(:disabled) {
   color: inherit;
 }
 
+.markdown-content pre:has(.html-preview-shell) {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.html-preview-shell {
+  overflow: hidden;
+  width: min(100%, 760px);
+  min-width: min(640px, 100%);
+  border: 1px solid #dbe3ef;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.6);
+}
+
+.html-preview-frame {
+  display: block;
+  width: 100%;
+  min-height: 520px;
+  border: 0;
+  background: #fff;
+}
+
+.artifact-view-page {
+  width: 100vw;
+  height: 100vh;
+  background: #fff;
+}
+
+.artifact-view-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+
+.artifact-view-loading,
+.artifact-view-error {
+  display: flex;
+  min-height: 100vh;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  color: #1f2937;
+}
+
+.artifact-view-error {
+  flex-direction: column;
+  text-align: center;
+}
+
+.artifact-view-error p {
+  margin: 0;
+  color: #6b7280;
+}
+
 .markdown-content blockquote {
   border-left: 3px solid #d1d5db;
   padding-left: 12px;

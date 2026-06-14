@@ -1,15 +1,33 @@
 package com.gtu.aiassistant.infrastructure.ai
 
+import ai.koog.agents.core.agent.AIAgent
+import ai.koog.agents.core.agent.config.AIAgentConfig
+import ai.koog.agents.core.agent.entity.AIAgentGraphStrategy
+import ai.koog.agents.core.annotation.InternalAgentsApi
+import ai.koog.agents.core.dsl.builder.node
+import ai.koog.agents.core.dsl.builder.strategy
+import ai.koog.agents.core.dsl.extension.nodeExecuteMultipleTools
+import ai.koog.agents.core.dsl.extension.onMultipleAssistantMessages
+import ai.koog.agents.core.dsl.extension.onMultipleToolCalls
+import ai.koog.agents.core.dsl.extension.requestStreamingAndSendResultsImpl
+import ai.koog.agents.core.environment.ReceivedToolResult
+import ai.koog.agents.core.environment.result
+import ai.koog.agents.core.tools.ToolRegistry
+import ai.koog.agents.features.eventHandler.feature.handleEvents
 import ai.koog.prompt.dsl.prompt
+import ai.koog.prompt.executor.clients.openai.OpenAIChatParams
 import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
-import ai.koog.prompt.executor.llms.SingleLLMPromptExecutor
+import ai.koog.prompt.executor.llms.RoundRobinRouter
+import ai.koog.prompt.executor.llms.RoutingLLMPromptExecutor
 import ai.koog.prompt.llm.LLMCapability
 import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
+import ai.koog.prompt.streaming.StreamFrame
 import arrow.core.Either
 import arrow.core.raise.either
 import arrow.core.raise.ensure
+import com.gtu.aiassistant.domain.artifacts.model.MessageArtifact
 import com.gtu.aiassistant.domain.chat.model.Message as DomainMessage
 import ai.koog.prompt.message.Message as KoogMessage
 import com.gtu.aiassistant.domain.chat.model.ChatSources
@@ -20,7 +38,6 @@ import com.gtu.aiassistant.domain.chat.port.output.GenerateMessagePort
 import com.gtu.aiassistant.domain.chat.port.output.GenerateMessageStreamStatus
 import com.gtu.aiassistant.domain.chat.port.output.validateForMessageGeneration
 import com.gtu.aiassistant.domain.model.InfrastructureError
-import com.gtu.aiassistant.domain.user.model.UserId
 import com.gtu.aiassistant.infrastructure.ai.tools.AgentSource
 import com.gtu.aiassistant.infrastructure.ai.tools.GtuKnowledgeSearchTool
 import com.gtu.aiassistant.infrastructure.ai.tools.GtuWebSearchTool
@@ -28,33 +45,19 @@ import com.gtu.aiassistant.infrastructure.ai.tools.UserMaterialContext
 import com.gtu.aiassistant.infrastructure.ai.tools.UserMaterialSearchTool
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
-import io.ktor.client.request.header
-import io.ktor.client.request.preparePost
-import io.ktor.client.request.setBody
-import io.ktor.client.statement.bodyAsChannel
-import io.ktor.http.ContentType
-import io.ktor.http.contentType
-import io.ktor.http.isSuccess
-
-import io.ktor.utils.io.ClosedWriteChannelException
-import io.ktor.utils.io.readUTF8Line
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.*
 import org.slf4j.LoggerFactory
 import java.time.Instant
 import java.util.UUID
 
 class AgentGenerateMessagePortImpl private constructor(
-    private val executors: List<SingleLLMPromptExecutor>,
+    private val executor: RoutingLLMPromptExecutor,
     private val model: LLModel,
     private val knowledgeSearchTool: GtuKnowledgeSearchTool,
     private val userMaterialSearchTool: UserMaterialSearchTool,
     private val webSearchTool: GtuWebSearchTool,
-    private val artifactService: AgentArtifactService?,
-    private val config: AiConfig,
-    private val apiKeySelector: AiApiKeySelector,
-    private val httpClient: HttpClient
+    private val artifactService: AgentArtifactService?
 ) : GenerateMessagePort {
     private val logger = LoggerFactory.getLogger(AgentGenerateMessagePortImpl::class.java)
 
@@ -69,19 +72,15 @@ class AgentGenerateMessagePortImpl private constructor(
                     command.collectionIds.size,
                     command.documentIds.size
                 )
-                val preparedGeneration = prepareGeneration(command).bind()
-                val artifactGeneration = createArtifactGeneration(preparedGeneration).bind()
-                val finalGeneration = preparedGeneration.copy(artifactGeneration = artifactGeneration)
-                val generatedText = executeLlm(finalGeneration).bind()
+                val validMessages = validateCommand(command).bind()
+                val agentResult = executeAgent(command, validMessages).bind()
                 logger.info(
                     "AI generation completed model={} outputLength={} sourceCount={}",
                     model.id,
-                    generatedText.length,
-                    finalGeneration.sources.size
+                    agentResult.generatedText.length,
+                    agentResult.sources.size
                 )
-                val validMessages = finalGeneration.validMessages
-                val sources = finalGeneration.sources
-                buildDomainMessage(validMessages, sources, generatedText, finalGeneration.artifactGeneration)
+                buildDomainMessage(validMessages, agentResult.sources, agentResult.generatedText, agentResult.artifacts)
             }
         }
 
@@ -100,27 +99,19 @@ class AgentGenerateMessagePortImpl private constructor(
                     command.collectionIds.size,
                     command.documentIds.size
                 )
-                val preparedGeneration = prepareGeneration(command, onStatus).bind()
-                val artifactGeneration = createArtifactGeneration(preparedGeneration, onStatus).bind()
-                val finalGeneration = preparedGeneration.copy(artifactGeneration = artifactGeneration)
-                val generatedText = executeLlmStream(finalGeneration, onToken, onStatus).bind()
+                val validMessages = validateCommand(command).bind()
+                val agentResult = executeAgent(command, validMessages, onToken, onStatus).bind()
                 logger.info(
                     "AI stream generation completed model={} outputLength={} sourceCount={}",
                     model.id,
-                    generatedText.length,
-                    finalGeneration.sources.size
+                    agentResult.generatedText.length,
+                    agentResult.sources.size
                 )
-                val validMessages = finalGeneration.validMessages
-                val sources = finalGeneration.sources
-                buildDomainMessage(validMessages, sources, generatedText, finalGeneration.artifactGeneration)
+                buildDomainMessage(validMessages, agentResult.sources, agentResult.generatedText, agentResult.artifacts)
             }
         }
 
-    private suspend fun prepareGeneration(
-        command: GenerateMessageCommand,
-        onStatus: suspend (GenerateMessageStreamStatus) -> Unit = {}
-    ): Either<InfrastructureError, PreparedGeneration> = either {
-        onStatus(GenerateMessageStreamStatus("thinking", "Preparing your request..."))
+    private fun validateCommand(command: GenerateMessageCommand): Either<InfrastructureError, List<DomainMessage>> = either {
         val validMessages = command.messages
             .validateForMessageGeneration()
             .mapLeft { cause ->
@@ -130,263 +121,177 @@ class AgentGenerateMessagePortImpl private constructor(
         ensure(command.sources.hasAny()) {
             InfrastructureError(cause = IllegalArgumentException("At least one source must be selected"))
         }
-
-        val latestUserText = validMessages.last().originalText
-        val gtuSources = if (command.sources.gtu) {
-            onStatus(GenerateMessageStreamStatus("gtu_search", "Searching GTU knowledge base..."))
-            knowledgeSearchTool.search(latestUserText)
-                .fold(ifLeft = { emptyList() }, ifRight = { it })
-        } else {
-            emptyList()
-        }
-        val materialContext = if (command.sources.materials) {
-            onStatus(GenerateMessageStreamStatus("materials_search", "Checking uploaded materials..."))
-            userMaterialSearchTool.resolve(
-                ownerUserId = command.userId,
-                query = latestUserText,
-                collectionIds = command.collectionIds,
-                documentIds = command.documentIds
-            ).fold(
-                ifLeft = { error ->
-                    logger.warn(
-                        "Uploaded material context resolution failed userId={} collectionCount={} documentCount={}",
-                        command.userId.value,
-                        command.collectionIds.size,
-                        command.documentIds.size,
-                        error.cause
-                    )
-                    UserMaterialContext(
-                        documents = emptyList(),
-                        sources = emptyList(),
-                        searchError = error.toMaterialContextError()
-                    )
-                },
-                ifRight = { it }
-            )
-        } else {
-            null
-        }
-        val materialSources = materialContext?.sources.orEmpty()
-        val bestLocalScore = (gtuSources + materialSources).maxOfOrNull { it.score }
-        val shouldSearchWeb = command.sources.web &&
-            (bestLocalScore == null || bestLocalScore < MIN_RAG_CONFIDENCE || latestUserText.isTimeSensitive())
-        val webSources = if (shouldSearchWeb) {
-            onStatus(GenerateMessageStreamStatus("web_search", "Searching web sources..."))
-            webSearchTool.search(latestUserText)
-                .fold(ifLeft = { emptyList() }, ifRight = { it })
-        } else {
-            emptyList()
-        }
-        val sources = command.sources.combineSources(gtuSources, materialSources, webSources)
-            .distinctBy { it.url to it.snippet }
-            .take(MAX_SOURCES)
-        val artifactIntent = artifactService?.detectIntent(latestUserText)
-        if (artifactIntent != null) {
-            onStatus(GenerateMessageStreamStatus("artifact_check", "Checking requested artifact..."))
-        }
-        onStatus(GenerateMessageStreamStatus("context_ready", "Context ready. Preparing answer..."))
-
-        logger.info(
-            "AI context prepared sources={} gtuSources={} materialSources={} webSources={} selectedSources={}",
-            command.sources,
-            gtuSources.size,
-            materialSources.size,
-            webSources.size,
-            sources.size
-        )
-
-        PreparedGeneration(
-            validMessages = validMessages,
-            userId = command.userId,
-            sourceSelection = command.sources,
-            sources = sources,
-            materialContext = materialContext,
-            artifactIntent = artifactIntent,
-            artifactGeneration = null
-        )
+        validMessages
     }
 
-    private suspend fun createArtifactGeneration(
-        preparedGeneration: PreparedGeneration,
+    private suspend fun executeAgent(
+        command: GenerateMessageCommand,
+        validMessages: List<DomainMessage>,
+        onToken: suspend (String) -> Unit = {},
         onStatus: suspend (GenerateMessageStreamStatus) -> Unit = {}
-    ): Either<InfrastructureError, ArtifactGenerationResult?> = either {
-        val service = artifactService ?: return@either null
-        val intent = preparedGeneration.artifactIntent ?: return@either null
-        val draft = if (intent.needsDraft) {
-            onStatus(GenerateMessageStreamStatus("drafting_document", "Writing artifact content..."))
-            executeArtifactDraft(preparedGeneration, intent).bind()
-        } else {
-            null
+    ): Either<InfrastructureError, AgentRunResult> = either {
+        onStatus(GenerateMessageStreamStatus("thinking", "Preparing agent tools..."))
+        val runtime = AgentToolRuntime(
+            command = command,
+            knowledgeSearchTool = knowledgeSearchTool,
+            userMaterialSearchTool = userMaterialSearchTool,
+            webSearchTool = webSearchTool,
+            artifactService = artifactService,
+            maxSources = MAX_SOURCES
+        )
+        val conversation = buildAgentConversation(command, validMessages)
+        val agent = createToolCallingAgent(
+            conversation = conversation,
+            toolRegistry = runtime.toolRegistry(),
+            executor = executor,
+            onToken = onToken,
+            onStatus = onStatus
+        )
+
+        val generatedText = try {
+            Either.catch {
+                agent.run(conversation.userMessage)
+            }.mapLeft { cause ->
+                logger.warn("AI agent generation failed model={}", model.id, cause)
+                InfrastructureError(cause)
+            }.bind().trim()
+        } finally {
+            agent.close()
         }
-        onStatus(GenerateMessageStreamStatus("creating_artifact", "Creating downloadable artifact..."))
-        service.createArtifact(
-            userId = preparedGeneration.userId,
-            intent = intent,
-            draft = draft
-        ).bind()
-    }
-
-    private suspend fun executeArtifactDraft(
-        preparedGeneration: PreparedGeneration,
-        intent: ArtifactIntent
-    ): Either<InfrastructureError, ArtifactDraft> = either {
-        val llmPrompt = prompt("generate-gtu-artifact-draft") {
-            system(preparedGeneration.artifactDraftPrompt(intent))
-            preparedGeneration.validMessages.takeLast(MAX_HISTORY_MESSAGES).forEach { message ->
-                when (message.senderType) {
-                    MessageSenderType.USER -> user(message.originalText)
-                    MessageSenderType.AI -> assistant(message.originalText)
-                }
-            }
-        }
-
-        val selectedApiKey = apiKeySelector.next()
-        val rawResponse = Either.catch {
-            executors[selectedApiKey.index].execute(llmPrompt, model)
-        }.mapLeft(::InfrastructureError).bind()
-
-        val markdown = Either.catch {
-            rawResponse.assistantText()
-        }.mapLeft { cause ->
-            logger.warn("AI artifact draft response could not be parsed model={} response={}", model.id, rawResponse, cause)
-            InfrastructureError(cause)
-        }.bind().trim().removeMarkdownFence()
-
-        ensure(markdown.isNotBlank()) {
-            logger.warn("AI artifact draft returned blank text model={} response={}", model.id, rawResponse)
-            InfrastructureError(cause = IllegalStateException("LLM artifact draft is blank"))
-        }
-
-        ArtifactDraft.fromMarkdown(markdown, fallbackTitle = intent.defaultTitle())
-    }
-
-    private suspend fun executeLlm(
-        preparedGeneration: PreparedGeneration
-    ): Either<InfrastructureError, String> = either {
-        val llmPrompt = prompt("generate-gtu-agent-message") {
-            system(preparedGeneration.systemPrompt(SYSTEM_PROMPT))
-            preparedGeneration.validMessages.takeLast(MAX_HISTORY_MESSAGES).forEach { message ->
-                when (message.senderType) {
-                    MessageSenderType.USER -> user(message.originalText)
-                    MessageSenderType.AI -> assistant(message.originalText)
-                }
-            }
-        }
-
-        val selectedApiKey = apiKeySelector.next()
-        val rawResponse = Either.catch {
-            executors[selectedApiKey.index].execute(llmPrompt, model)
-        }.mapLeft(::InfrastructureError).bind()
-
-        val generatedText = Either.catch {
-            rawResponse.assistantText()
-        }.mapLeft { cause ->
-            logger.warn("AI generation response could not be parsed model={} response={}", model.id, rawResponse, cause)
-            InfrastructureError(cause)
-        }.bind().trim()
 
         ensure(generatedText.isNotBlank()) {
-            logger.warn("AI generation returned blank text model={} response={}", model.id, rawResponse)
+            logger.warn("AI agent returned blank text model={}", model.id)
             InfrastructureError(cause = IllegalStateException("LLM response is blank"))
         }
-        generatedText
+
+        AgentRunResult(
+            generatedText = generatedText,
+            sources = runtime.sourcesSnapshot(),
+            artifacts = runtime.artifactsSnapshot()
+        )
     }
 
-    private suspend fun executeLlmStream(
-        preparedGeneration: PreparedGeneration,
+    private fun buildAgentConversation(
+        command: GenerateMessageCommand,
+        validMessages: List<DomainMessage>
+    ): AgentConversation {
+        val windowedMessages = validMessages.takeLast(MAX_HISTORY_MESSAGES)
+        val historyMessages = windowedMessages.dropLast(1)
+        val userMessage = windowedMessages.last().originalText
+        val historyPrompt = prompt(
+            id = "generate-gtu-agent-message",
+            params = OpenAIChatParams(parallelToolCalls = true)
+        ) {
+            system(command.sources.agentSystemPrompt())
+            historyMessages.forEach { message ->
+                when (message.senderType) {
+                    MessageSenderType.USER -> user(message.originalText)
+                    MessageSenderType.AI -> assistant(message.originalText)
+                }
+            }
+        }
+
+        return AgentConversation(historyPrompt = historyPrompt, userMessage = userMessage)
+    }
+
+    private fun createToolCallingAgent(
+        conversation: AgentConversation,
+        toolRegistry: ToolRegistry,
+        executor: RoutingLLMPromptExecutor,
         onToken: suspend (String) -> Unit,
         onStatus: suspend (GenerateMessageStreamStatus) -> Unit
-    ): Either<InfrastructureError, String> = either {
-        onStatus(GenerateMessageStreamStatus("answering", "Writing answer..."))
-        val systemContent = preparedGeneration.systemPrompt(SYSTEM_PROMPT)
-        val messagesJson = buildJsonArray {
-            addJsonObject {
-                put("role", "system")
-                put("content", systemContent)
-            }
-            preparedGeneration.validMessages.takeLast(MAX_HISTORY_MESSAGES).forEach { message ->
-                addJsonObject {
-                    put("role", when (message.senderType) {
-                        MessageSenderType.USER -> "user"
-                        MessageSenderType.AI -> "assistant"
-                    })
-                    put("content", message.originalText)
+    ): AIAgent<String, String> = AIAgent(
+        promptExecutor = executor,
+        agentConfig = AIAgentConfig(
+            prompt = conversation.historyPrompt,
+            model = model,
+            maxAgentIterations = MAX_AGENT_ITERATIONS
+        ),
+        strategy = streamingToolStrategy(),
+        toolRegistry = toolRegistry,
+        installFeatures = {
+            handleEvents {
+                onLLMStreamingFrameReceived { context ->
+                    when (val frame = context.streamFrame) {
+                        is StreamFrame.TextDelta -> {
+                            if (frame.text.isNotEmpty()) {
+                                onToken(frame.text)
+                            }
+                        }
+                        else -> Unit
+                    }
+                }
+                onToolCallStarting { context ->
+                    onStatus(
+                        GenerateMessageStreamStatus(
+                            phase = "tool_call_started",
+                            message = "Calling ${context.toolName.orEmpty().ifBlank { "tool" }}..."
+                        )
+                    )
+                }
+                onToolCallCompleted { context ->
+                    onStatus(
+                        GenerateMessageStreamStatus(
+                            phase = "tool_call_completed",
+                            message = "Completed ${context.toolName.orEmpty().ifBlank { "tool" }}."
+                        )
+                    )
+                }
+                onToolCallFailed { context ->
+                    onStatus(
+                        GenerateMessageStreamStatus(
+                            phase = "tool_call_failed",
+                            message = "Tool ${context.toolName.orEmpty().ifBlank { "call" }} failed."
+                        )
+                    )
                 }
             }
         }
+    )
 
-        val requestBody = buildJsonObject {
-            put("model", model.id)
-            put("stream", true)
-            put("messages", messagesJson)
-        }
-
-        val textBuilder = StringBuilder()
-        var streamedChunks = 0
-
-        val streamUrl = config.openAiChatCompletionsUrl()
-        val selectedApiKey = apiKeySelector.next()
-        Either.catch {
-            httpClient.preparePost(streamUrl) {
-                contentType(ContentType.Application.Json)
-                header("Authorization", "Bearer ${selectedApiKey.value}")
-                setBody(requestBody.toString())
-            }.execute { response ->
-                if (!response.status.isSuccess()) {
-                    error("LLM stream request failed: status=${response.status.value} url=$streamUrl")
+    @OptIn(InternalAgentsApi::class)
+    private fun streamingToolStrategy(): AIAgentGraphStrategy<String, String> = strategy("gtu_agent_tool_loop") {
+        val nodeCallLLM by node<String, List<KoogMessage.Response>>("stream_initial_llm") { message ->
+            llm.writeSession {
+                appendPrompt {
+                    user(message)
                 }
-                val channel = response.bodyAsChannel()
-                while (!channel.isClosedForRead) {
-                    val line = channel.readUTF8Line() ?: break
-                    if (line.startsWith("data: ")) {
-                        val data = line.removePrefix("data: ").trim()
-                        if (data == "[DONE]") break
-                        val content = try {
-                            val json = Json.parseToJsonElement(data).jsonObject
-                            json["choices"]
-                                ?.jsonArray
-                                ?.firstOrNull()
-                                ?.jsonObject
-                                ?.get("delta")
-                                ?.jsonObject
-                                ?.get("content")
-                                ?.jsonPrimitive
-                                ?.content ?: ""
-                        } catch (error: Exception) {
-                            logger.warn("AI stream chunk parse failed model={} data={}", model.id, data, error)
-                            ""
-                        }
-
-                        if (content.isNotEmpty()) {
-                            streamedChunks += 1
-                            onToken(content)
-                            textBuilder.append(content)
-                        }
+            }
+            requestStreamingAndSendResultsImpl(structureDefinition = null)
+        }
+        val nodeExecuteTool by nodeExecuteMultipleTools(parallelTools = true)
+        val nodeSendToolResult by node<List<ReceivedToolResult>, List<KoogMessage.Response>>("stream_tool_results") { results ->
+            llm.writeSession {
+                appendPrompt {
+                    tool {
+                        results.forEach { result(it) }
                     }
                 }
             }
-        }.mapLeft { cause ->
-            if (cause is ClosedWriteChannelException) {
-                logger.info("AI stream delivery cancelled model={} streamedChunks={} reason=client_disconnected", model.id, streamedChunks)
-            } else {
-                logger.warn("AI stream request failed model={} url={} apiKeyIndex={}", model.id, streamUrl, selectedApiKey.index, cause)
-            }
-            InfrastructureError(cause)
-        }.bind()
-
-        val fullText = textBuilder.toString().trim()
-        ensure(fullText.isNotBlank()) {
-            logger.warn("AI stream returned blank text model={} streamedChunks={}", model.id, streamedChunks)
-            InfrastructureError(cause = IllegalStateException("LLM stream produced empty response"))
+            requestStreamingAndSendResultsImpl(structureDefinition = null)
         }
-        fullText
+
+        edge(nodeStart forwardTo nodeCallLLM)
+        edge(nodeCallLLM forwardTo nodeExecuteTool onMultipleToolCalls { true })
+        edge(
+            nodeCallLLM forwardTo nodeFinish
+                onMultipleAssistantMessages { true }
+                transformed { it.joinToString(separator = "\n") { message -> message.content } }
+        )
+        edge(nodeExecuteTool forwardTo nodeSendToolResult)
+        edge(nodeSendToolResult forwardTo nodeExecuteTool onMultipleToolCalls { true })
+        edge(
+            nodeSendToolResult forwardTo nodeFinish
+                onMultipleAssistantMessages { true }
+                transformed { it.joinToString(separator = "\n") { message -> message.content } }
+        )
     }
 
     private fun buildDomainMessage(
         validMessages: List<DomainMessage>,
         sources: List<AgentSource>,
         generatedText: String,
-        artifactGeneration: ArtifactGenerationResult?
+        artifacts: List<MessageArtifact>
     ): DomainMessage {
         val lastMessageCreatedAt = validMessages.last().createdAt
         return DomainMessage(
@@ -395,7 +300,7 @@ class AgentGenerateMessagePortImpl private constructor(
             senderType = MessageSenderType.AI,
             createdAt = maxOf(Instant.now(), lastMessageCreatedAt.plusMillis(1)),
             citations = sources.toCitations(),
-            artifacts = artifactGeneration?.artifacts.orEmpty()
+            artifacts = artifacts
         )
     }
 
@@ -409,17 +314,16 @@ class AgentGenerateMessagePortImpl private constructor(
         ): AgentGenerateMessagePortImpl {
             val client = HttpClient(CIO)
             val apiKeys = config.normalizedApiKeys()
-            val executors = apiKeys.map { apiKey ->
-                val openaiClient = OpenAILLMClient(
+            val clients = apiKeys.map { apiKey ->
+                OpenAILLMClient(
                     apiKey = apiKey,
                     settings = OpenAIClientSettings(baseUrl = config.baseUrl),
                     baseClient = client
                 )
-                SingleLLMPromptExecutor(openaiClient)
             }
 
             return AgentGenerateMessagePortImpl(
-                executors = executors,
+                executor = RoutingLLMPromptExecutor(RoundRobinRouter(clients)),
                 model = LLModel(
                     provider = LLMProvider.OpenAI,
                     id = config.model,
@@ -432,19 +336,15 @@ class AgentGenerateMessagePortImpl private constructor(
                 knowledgeSearchTool = knowledgeSearchTool,
                 userMaterialSearchTool = userMaterialSearchTool,
                 webSearchTool = webSearchTool,
-                artifactService = artifactService,
-                config = config,
-                apiKeySelector = AiApiKeySelector(apiKeys),
-                httpClient = client
+                artifactService = artifactService
             )
         }
 
         private const val MAX_HISTORY_MESSAGES: Int = 20
+        private const val MAX_AGENT_ITERATIONS: Int = 100
         private const val DEFAULT_CONTEXT_LENGTH: Long = 128_000L
         private const val MAX_SOURCES: Int = 6
-        private const val MIN_RAG_CONFIDENCE: Double = 0.32
-
-        private const val SYSTEM_PROMPT: String =
+        const val SYSTEM_PROMPT: String =
             """
             You are the GTU AI Assistant for students of Georgian Technical University.
             In this application, GTU always means Georgian Technical University in Georgia. Never reinterpret GTU as Gujarat Technological University or any other institution.
@@ -464,7 +364,7 @@ class AgentGenerateMessagePortImpl private constructor(
             Never claim access to private systems such as VICI, e-learning, testing, finances, or personal records.
 
             Artifact rules:
-            - If Artifact context is present, an artifact was already created by the backend before your final answer. Mention its download/open links and briefly describe what was created.
+            - If artifact_create returns artifact context, mention its download/open links and briefly describe what was created.
             - When Artifact context says the file was verified, tell the user that the returned file was checked and stored successfully.
             - Do not refuse artifact creation only because source context is empty. Artifact creation is a formatting/generation task, not a factual-source lookup.
             - For a user request like "create a docx report about GTU AI Assistant capabilities", use the capability list in this system prompt as valid self-context.
@@ -476,31 +376,238 @@ class AgentGenerateMessagePortImpl private constructor(
     }
 }
 
-private fun List<AgentSource>.toContextBlock(): String =
-    if (isEmpty()) {
-        """
-        Source excerpt context:
-        No relevant source excerpts were found for this message.
-        If the user asks for factual information that requires source excerpts, explicitly state that it could not be confirmed from the allowed source excerpts.
-        """.trimIndent()
-    } else {
-        buildString {
-            appendLine("Allowed source excerpt context:")
-            this@toContextBlock.forEachIndexed { index, source ->
-                appendLine("[${index + 1}] ${source.title}")
-                appendLine("Type: ${source.sourceType}")
-                appendLine("URL: ${source.url}")
-                appendLine("Excerpt: ${source.snippet}")
-                appendLine()
-            }
+private data class AgentConversation(
+    val historyPrompt: ai.koog.prompt.dsl.Prompt,
+    val userMessage: String
+)
+
+private data class AgentRunResult(
+    val generatedText: String,
+    val sources: List<AgentSource>,
+    val artifacts: List<MessageArtifact>
+)
+
+class AgentToolRuntime(
+    private val command: GenerateMessageCommand,
+    private val knowledgeSearchTool: GtuKnowledgeSearchTool,
+    private val userMaterialSearchTool: UserMaterialSearchTool,
+    private val webSearchTool: GtuWebSearchTool,
+    private val artifactService: AgentArtifactService?,
+    private val maxSources: Int
+) {
+    private val collectedSources = mutableListOf<AgentSource>()
+    private val collectedArtifacts = mutableListOf<MessageArtifact>()
+    private val latestUserText = command.messages.last().originalText
+
+    fun toolRegistry(): ToolRegistry = ToolRegistry {
+        tool(
+            toolFunction = ::currentTime,
+            name = "current_time",
+            description = "Returns the current server time as an ISO-8601 instant string."
+        )
+
+        if (command.sources.gtu) {
+            tool(
+                toolFunction = ::gtuKnowledgeSearch,
+                name = "gtu_knowledge_search",
+                description = "Searches verified Georgian Technical University source excerpts. Use this before making factual claims about GTU when public GTU knowledge is needed."
+            )
+        }
+
+        if (command.sources.materials) {
+            tool(
+                toolFunction = ::uploadedMaterialsSearch,
+                name = "uploaded_materials_search",
+                description = "Searches the current user's selected uploaded materials and returns document inventory plus matching excerpts. Use this before answering from uploaded files."
+            )
+        }
+
+        if (command.sources.web) {
+            tool(
+                toolFunction = ::webSearch,
+                name = "web_search",
+                description = "Searches allowed public web pages for current or external context. Use this for latest, time-sensitive, or web-grounded claims."
+            )
+        }
+
+        if (artifactService != null) {
+            tool(
+                toolFunction = ::artifactCreate,
+                name = "artifact_create",
+                description = "Creates one downloadable artifact through the backend-controlled artifact service. Use only when the user explicitly asks to create, save, export, download, prepare, draw, plot, or generate a file. Parameters: kind is text, html, docx, or chart; content is complete Markdown content for text/html/docx or a chart prompt for chart; fileName is optional."
+            )
         }
     }
 
-private fun InfrastructureError.toMaterialContextError(): String =
-    cause.message
-        ?.takeIf(String::isNotBlank)
-        ?.let { "Uploaded material context could not be loaded: $it" }
-        ?: "Uploaded material context could not be loaded: ${cause::class.simpleName ?: "unknown error"}"
+    fun currentTime(): String = Instant.now().toString()
+
+    suspend fun gtuKnowledgeSearch(query: String, maxResults: Int = 6): String {
+        val normalizedQuery = query.ifBlank { latestUserText }
+        val result = knowledgeSearchTool.search(normalizedQuery, maxResults.coerceIn(1, 10))
+        return result.fold(
+            ifLeft = { error -> "Error: GTU knowledge search failed: ${error.cause.message ?: error.cause::class.simpleName ?: "unknown error"}" },
+            ifRight = { sources ->
+                rememberSources(sources)
+                sources.formatAsToolResult("GTU knowledge search results")
+            }
+        )
+    }
+
+    suspend fun uploadedMaterialsSearch(query: String, maxResults: Int = 6): String {
+        val normalizedQuery = query.ifBlank { latestUserText }
+        val result = userMaterialSearchTool.resolve(
+            ownerUserId = command.userId,
+            query = normalizedQuery,
+            collectionIds = command.collectionIds,
+            documentIds = command.documentIds,
+            maxResults = maxResults.coerceIn(1, 10)
+        )
+        return result.fold(
+            ifLeft = { error -> "Error: uploaded material search failed: ${error.cause.message ?: error.cause::class.simpleName ?: "unknown error"}" },
+            ifRight = { context ->
+                rememberSources(context.sources)
+                buildString {
+                    appendLine("Uploaded material search results:")
+                    appendLine(context.toContextBlock())
+                    appendLine(context.sources.formatAsToolResult("Matching uploaded material excerpts"))
+                }.trim()
+            }
+        )
+    }
+
+    suspend fun webSearch(query: String): String {
+        val normalizedQuery = query.ifBlank { latestUserText }
+        val result = webSearchTool.search(normalizedQuery)
+        return result.fold(
+            ifLeft = { error -> "Error: web search failed: ${error.cause.message ?: error.cause::class.simpleName ?: "unknown error"}" },
+            ifRight = { sources ->
+                rememberSources(sources)
+                sources.formatAsToolResult("Web search results")
+            }
+        )
+    }
+
+    suspend fun artifactCreate(kind: String, content: String, fileName: String? = null): String {
+        val service = artifactService ?: return "Error: artifact creation is not configured."
+        val normalizedKind = kind.trim().lowercase()
+        val artifactKind = when (normalizedKind) {
+            "text", "markdown", "md", "txt" -> ArtifactKind.TEXT
+            "html", "page" -> ArtifactKind.HTML
+            "docx", "word", "document" -> ArtifactKind.DOCX
+            "chart", "plot", "png" -> ArtifactKind.CHART
+            else -> return "Error: unsupported artifact kind '$kind'. Use text, html, docx, or chart."
+        }
+        val artifactContent = content.ifBlank { latestUserText }
+        val intent = artifactKind.toToolIntent(content = artifactContent, fileName = fileName)
+        val draft = if (intent.needsDraft) {
+            ArtifactDraft.fromMarkdown(artifactContent, fallbackTitle = intent.defaultTitle())
+        } else {
+            null
+        }
+
+        return service.createArtifact(
+            userId = command.userId,
+            intent = intent,
+            draft = draft
+        ).fold(
+            ifLeft = { error -> "Error: artifact creation failed: ${error.cause.message ?: error.cause::class.simpleName ?: "unknown error"}" },
+            ifRight = { result ->
+                if (result == null) {
+                    "Error: artifact service did not create an artifact."
+                } else {
+                    rememberArtifacts(result.artifacts)
+                    result.context
+                }
+            }
+        )
+    }
+
+    fun sourcesSnapshot(): List<AgentSource> = synchronized(collectedSources) {
+        collectedSources
+            .distinctBy { it.url to it.snippet }
+            .take(maxSources)
+    }
+
+    fun artifactsSnapshot(): List<MessageArtifact> = synchronized(collectedArtifacts) {
+        collectedArtifacts.distinctBy { it.id }
+    }
+
+    private fun rememberSources(sources: List<AgentSource>) {
+        synchronized(collectedSources) {
+            collectedSources += sources
+        }
+    }
+
+    private fun rememberArtifacts(artifacts: List<MessageArtifact>) {
+        synchronized(collectedArtifacts) {
+            collectedArtifacts += artifacts
+        }
+    }
+}
+
+private fun List<AgentSource>.formatAsToolResult(title: String): String =
+    if (isEmpty()) {
+        "$title:\nNo relevant results were found."
+    } else {
+        buildString {
+            appendLine("$title:")
+            this@formatAsToolResult.forEachIndexed { index, source ->
+                appendLine("[${index + 1}] ${source.title}")
+                appendLine("Type: ${source.sourceType}")
+                appendLine("URL: ${source.url}")
+                appendLine("Score: ${source.score}")
+                source.documentId?.let { appendLine("Document ID: ${it.value}") }
+                source.pageStart?.let { start ->
+                    val end = source.pageEnd?.takeIf { it != start }
+                    appendLine(if (end == null) "Page: $start" else "Pages: $start-$end")
+                }
+                appendLine("Excerpt: ${source.snippet}")
+                appendLine()
+            }
+        }.trim()
+    }
+
+private fun ArtifactKind.toToolIntent(content: String, fileName: String?): ArtifactIntent {
+    val default = when (this) {
+        ArtifactKind.TEXT -> "assistant-output.md"
+        ArtifactKind.HTML -> "assistant-page.html"
+        ArtifactKind.DOCX -> "assistant-document.docx"
+        ArtifactKind.CHART -> "assistant-chart.png"
+    }
+    val extension = when (this) {
+        ArtifactKind.TEXT -> ".md"
+        ArtifactKind.HTML -> ".html"
+        ArtifactKind.DOCX -> ".docx"
+        ArtifactKind.CHART -> ".png"
+    }
+    val resolvedFileName = normalizeArtifactFileName(fileName, default, extension)
+    return ArtifactIntent(
+        kind = this,
+        fileName = resolvedFileName,
+        contentType = when (this) {
+            ArtifactKind.TEXT -> "text/markdown; charset=utf-8"
+            ArtifactKind.HTML -> "text/html; charset=utf-8"
+            ArtifactKind.DOCX -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            ArtifactKind.CHART -> "image/png"
+        },
+        artifactPath = when (this) {
+            ArtifactKind.DOCX -> "assistant-document.docx"
+            ArtifactKind.CHART -> "assistant-chart.png"
+            ArtifactKind.TEXT, ArtifactKind.HTML -> ""
+        },
+        originalPrompt = content
+    )
+}
+
+private fun normalizeArtifactFileName(raw: String?, fallback: String, extension: String): String {
+    val candidate = raw
+        ?.trim()
+        ?.take(120)
+        ?.takeIf { it.isNotBlank() }
+        ?.takeIf { "/" !in it && "\\" !in it && ".." !in it && it.none(Char::isISOControl) }
+        ?: fallback
+    return if (candidate.endsWith(extension, ignoreCase = true)) candidate else candidate.substringBeforeLast('.') + extension
+}
 
 private fun List<AgentSource>.toCitations(): List<MessageCitation> =
     distinctBy { it.url }
@@ -516,57 +623,6 @@ private fun List<AgentSource>.toCitations(): List<MessageCitation> =
                 pageEnd = source.pageEnd
             )
         }
-
-private fun String.isTimeSensitive(): Boolean {
-    val normalized = lowercase()
-    return listOf(
-        "today", "latest", "current", "deadline", "news", "now",
-        "сегодня", "сейчас", "последн", "дедлайн", "новост",
-        "დღეს", "ახლა"
-    ).any { it in normalized }
-}
-
-private fun List<KoogMessage.Response>.assistantText(): String =
-    filterIsInstance<KoogMessage.Assistant>()
-        .joinToString(separator = "\n") { it.content }
-        .ifBlank { error("No assistant message in response: $this") }
-
-private data class PreparedGeneration(
-    val validMessages: List<DomainMessage>,
-    val userId: UserId,
-    val sourceSelection: ChatSources,
-    val sources: List<AgentSource>,
-    val materialContext: UserMaterialContext?,
-    val artifactIntent: ArtifactIntent?,
-    val artifactGeneration: ArtifactGenerationResult?
-) {
-    fun systemPrompt(basePrompt: String): String =
-        basePrompt + "\n\n" + sourceSelection.promptRules() +
-            materialContext.toContextBlock() +
-            "\n\n" + sources.toContextBlock() +
-            artifactGeneration.toContextBlock()
-
-    fun artifactDraftPrompt(intent: ArtifactIntent): String =
-        """
-        You are a document-writing sub-agent for GTU AI Assistant.
-        In this application, GTU always means Georgian Technical University in Georgia. Never reinterpret GTU as Gujarat Technological University or any other institution.
-        Your task is to write the complete content for a downloadable ${intent.kind.name} artifact.
-        Return Markdown only. Do not wrap it in code fences. Do not mention download links.
-        Write in the user's language and satisfy the latest user request as a finished document, not as instructions.
-
-        Latest user request:
-        ${validMessages.last().originalText}
-
-        Grounding rules:
-        ${sourceSelection.promptRules()}
-        For factual claims about GTU, rely only on the allowed source context below. If the context is insufficient, include a clear note that the information could not be fully confirmed from the allowed sources.
-        Do not invent deadlines, prices, contacts, rules, or personal student data.
-
-        ${materialContext.toContextBlock()}
-
-        ${sources.toContextBlock()}
-        """.trimIndent()
-}
 
 private fun UserMaterialContext?.toContextBlock(): String {
     if (this == null) return ""
@@ -619,13 +675,6 @@ private const val MAX_MATERIAL_CONTEXT_DOCUMENTS = 12
 private const val MAX_MATERIAL_OUTLINE_CONTEXT_ENTRIES = 50
 private const val MAX_MATERIAL_ERROR_CONTEXT_LENGTH = 240
 
-private fun ArtifactGenerationResult?.toContextBlock(): String =
-    if (this == null) {
-        ""
-    } else {
-        "\n\nArtifact context:\n$context\nMention the generated artifact links and verification status in the final answer."
-    }
-
 private fun ArtifactIntent.defaultTitle(): String =
     when (kind) {
         ArtifactKind.DOCX -> "GTU Document"
@@ -634,22 +683,23 @@ private fun ArtifactIntent.defaultTitle(): String =
         ArtifactKind.CHART -> "Generated Chart"
     }
 
-private fun String.removeMarkdownFence(): String {
-    val trimmed = trim()
-    if (!trimmed.startsWith("```")) return trimmed
-    return trimmed
-        .lines()
-        .drop(1)
-        .dropLastWhile { it.trim() == "```" }
-        .joinToString("\n")
-        .trim()
-}
+private fun ChatSources.agentSystemPrompt(): String =
+    AgentGenerateMessagePortImpl.SYSTEM_PROMPT +
+        "\n\nSelected source policy:\n" + promptRules() +
+        """
 
-private fun AiConfig.openAiChatCompletionsUrl(): String {
-    val normalizedBaseUrl = baseUrl.trimEnd('/')
-    val openAiBaseUrl = if (normalizedBaseUrl.endsWith("/v1")) normalizedBaseUrl else "$normalizedBaseUrl/v1"
-    return "$openAiBaseUrl/chat/completions"
-}
+        Tool-calling rules:
+        - You have real function tools. Use them whenever the answer needs source-grounded factual information, uploaded-material content, current/web information, exact current time, or file creation.
+        - Do not claim that you cannot use tools. If the user asks about capabilities, describe the available application tools naturally.
+        - For GTU factual claims, call gtu_knowledge_search when it is available unless the answer is already fully supported by prior conversation.
+        - For uploaded files, call uploaded_materials_search before answering from uploaded materials.
+        - For latest/current/web-grounded claims, call web_search when it is available.
+        - If a needed source tool is unavailable because the user did not select that source, say that the selected sources do not allow verifying that information.
+        - If a tool returns no relevant evidence, state that the selected sources did not confirm the answer instead of inventing details.
+        - Call artifact_create only when the user explicitly asks to create, save, export, download, prepare, draw, plot, or generate a file. Provide complete content/brief to the tool.
+        - When independent tool calls are needed, request them in the same tool-calling step.
+        - After tool results, answer the user directly and include relevant source URLs or artifact links returned by tools.
+        """.trimIndent()
 
 private fun ChatSources.promptRules(): String {
     val enabled = listOfNotNull(
@@ -675,21 +725,4 @@ private fun ChatSources.promptRules(): String {
     }
 
     return "Use only these selected sources: $enabled. $restriction$fallback"
-}
-
-private fun ChatSources.combineSources(
-    gtuSources: List<AgentSource>,
-    materialSources: List<AgentSource>,
-    webSources: List<AgentSource>
-): List<AgentSource> {
-    val selected = listOfNotNull(
-        materialSources.takeIf { materials },
-        gtuSources.takeIf { gtu },
-        webSources.takeIf { web }
-    )
-    if (selected.isEmpty()) return emptyList()
-
-    val firstPass = selected.flatMap { it.take(2) }
-    val remaining = selected.flatMap { it.drop(2) }
-    return firstPass + remaining
 }

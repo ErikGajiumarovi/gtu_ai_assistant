@@ -22,12 +22,14 @@ import {
   createMaterialCollection,
   deleteMaterial,
   deleteMaterialCollection,
+  downloadAuthenticatedFile,
   isUnauthorizedApiError,
   listChats,
   listMaterialCollections,
   listMaterials,
   login,
   openAuthenticatedDownload,
+  readAuthenticatedText,
   registerUser,
   streamPaths,
   uploadMaterial
@@ -55,6 +57,11 @@ type Notice = {
 const defaultSources: AgentSources = { gtu: true, materials: true, web: false };
 
 export function App() {
+  const artifactViewPath = resolveArtifactViewPath(window.location.pathname);
+  if (artifactViewPath) {
+    return <ArtifactViewPage apiViewUrl={artifactViewPath} />;
+  }
+
   const queryClient = useQueryClient();
   const { session, authExpired, setSession, logout, acknowledgeSessionExpired } = useAuthStore();
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -320,6 +327,11 @@ export function App() {
         onSubmit={(text) => void handleSubmit(text)}
         onStop={() => streamAbortRef.current?.abort()}
         onOpenMaterialCitation={(url) => {
+          const artifactViewUrl = toArtifactViewPageUrl(url);
+          if (artifactViewUrl) {
+            window.open(artifactViewUrl, "_blank", "noopener,noreferrer");
+            return;
+          }
           if (isAuthenticatedApiUrl(url)) {
             void openAuthenticatedDownload(url).catch((error) => showError("Download failed", error, setNotice));
             return;
@@ -329,6 +341,9 @@ export function App() {
             return;
           }
           void openAuthenticatedDownload(url).catch((error) => showError("Download failed", error, setNotice));
+        }}
+        onDownloadArtifact={(artifact) => {
+          void downloadAuthenticatedFile(artifact.downloadUrl, artifact.fileName).catch((error) => showError("Download failed", error, setNotice));
         }}
       />
     </div>
@@ -758,7 +773,8 @@ function ChatScreen({
   onSourcesChange,
   onSubmit,
   onStop,
-  onOpenMaterialCitation
+  onOpenMaterialCitation,
+  onDownloadArtifact
 }: {
   notice: Notice | null;
   selectedChat: ChatResponse | null;
@@ -774,6 +790,7 @@ function ChatScreen({
   onSubmit: (text: string) => void;
   onStop: () => void;
   onOpenMaterialCitation: (url: string) => void;
+  onDownloadArtifact: (artifact: ArtifactResponse) => void;
 }) {
   const [composerText, setComposerText] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -815,6 +832,7 @@ function ChatScreen({
               citations={message.senderType === "USER" ? [] : message.citations}
               artifacts={message.senderType === "USER" ? [] : message.artifacts ?? []}
               onOpenMaterialCitation={onOpenMaterialCitation}
+              onDownloadArtifact={onDownloadArtifact}
             />
           ))}
           {pendingUserText && <MessageBubble text={pendingUserText} isUser time="" />}
@@ -882,7 +900,8 @@ function MessageBubble({
   artifacts = [],
   isStreaming = false,
   status = null,
-  onOpenMaterialCitation = () => undefined
+  onOpenMaterialCitation = () => undefined,
+  onDownloadArtifact = () => undefined
 }: {
   text: string;
   isUser: boolean;
@@ -892,8 +911,10 @@ function MessageBubble({
   isStreaming?: boolean;
   status?: StreamStatus | null;
   onOpenMaterialCitation?: (url: string) => void;
+  onDownloadArtifact?: (artifact: ArtifactResponse) => void;
 }) {
   const visibleStatus = isStreaming && !text ? status : null;
+  const htmlPreview = !isUser ? extractRenderableHtml(text) : null;
 
   return (
     <article className={`message-row ${isUser ? "user" : "assistant"}`}>
@@ -916,29 +937,45 @@ function MessageBubble({
               </div>
             ) : (
               <>
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={{
-                    a: ({ node: _node, href, ...props }) => {
-                      const isAuthenticatedUrl = href ? isAuthenticatedApiUrl(href) : false;
-                      return (
-                        <a
-                          {...props}
-                          href={href}
-                          target="_blank"
-                          rel="noreferrer"
-                          onClick={(event) => {
-                            if (!href || !isAuthenticatedUrl) return;
-                            event.preventDefault();
-                            onOpenMaterialCitation(href);
-                          }}
-                        />
-                      );
-                    }
-                  }}
-                >
-                  {text || (isStreaming ? "" : " ")}
-                </ReactMarkdown>
+                {htmlPreview ? (
+                  <HtmlPreview html={htmlPreview} />
+                ) : (
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      a: ({ node: _node, href, ...props }) => {
+                        const isAuthenticatedUrl = href ? isAuthenticatedApiUrl(href) : false;
+                        return (
+                          <a
+                            {...props}
+                            href={href}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(event) => {
+                              if (!href || !isAuthenticatedUrl) return;
+                              event.preventDefault();
+                              onOpenMaterialCitation(href);
+                            }}
+                          />
+                        );
+                      },
+                      code: ({ node: _node, className, children, ...props }) => {
+                        const language = /language-(\w+)/.exec(className ?? "")?.[1]?.toLowerCase();
+                        const codeText = String(children).replace(/\n$/, "");
+                        if (language === "html" && looksLikeHtml(codeText)) {
+                          return <HtmlPreview html={codeText} />;
+                        }
+                        return (
+                          <code className={className} {...props}>
+                            {children}
+                          </code>
+                        );
+                      }
+                    }}
+                  >
+                    {text || (isStreaming ? "" : " ")}
+                  </ReactMarkdown>
+                )}
                 {isStreaming && <span className="cursor">|</span>}
               </>
             )}
@@ -953,14 +990,81 @@ function MessageBubble({
             ))}
           </div>
         )}
-        {!isUser && artifacts.length > 0 && <ArtifactList artifacts={artifacts} onOpenArtifact={onOpenMaterialCitation} />}
+        {!isUser && artifacts.length > 0 && (
+          <ArtifactList artifacts={artifacts} onOpenArtifact={onOpenMaterialCitation} onDownloadArtifact={onDownloadArtifact} />
+        )}
         {time && <small className="message-time">{time}</small>}
       </div>
     </article>
   );
 }
 
-function ArtifactList({ artifacts, onOpenArtifact }: { artifacts: ArtifactResponse[]; onOpenArtifact: (url: string) => void }) {
+function HtmlPreview({ html }: { html: string }) {
+  return (
+    <div className="html-preview-shell">
+      <iframe
+        title="Generated HTML preview"
+        className="html-preview-frame"
+        sandbox="allow-scripts allow-forms allow-popups allow-modals"
+        referrerPolicy="no-referrer"
+        srcDoc={html}
+      />
+    </div>
+  );
+}
+
+function ArtifactViewPage({ apiViewUrl }: { apiViewUrl: string }) {
+  const [html, setHtml] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    readAuthenticatedText(apiViewUrl)
+      .then((value) => {
+        if (!cancelled) setHtml(value);
+      })
+      .catch((cause) => {
+        if (!cancelled) setError(cause instanceof Error ? cause.message : "Failed to open artifact");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [apiViewUrl]);
+
+  return (
+    <main className="artifact-view-page">
+      {error ? (
+        <div className="artifact-view-error">
+          <strong>Could not open artifact</strong>
+          <p>{error}</p>
+        </div>
+      ) : html === null ? (
+        <div className="artifact-view-loading">
+          <Loader2 size={18} className="spin" /> Opening artifact...
+        </div>
+      ) : (
+        <iframe
+          title="HTML artifact"
+          className="artifact-view-frame"
+          sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads"
+          referrerPolicy="no-referrer"
+          srcDoc={html}
+        />
+      )}
+    </main>
+  );
+}
+
+function ArtifactList({
+  artifacts,
+  onOpenArtifact,
+  onDownloadArtifact
+}: {
+  artifacts: ArtifactResponse[];
+  onOpenArtifact: (url: string) => void;
+  onDownloadArtifact: (artifact: ArtifactResponse) => void;
+}) {
   return (
     <div className="artifacts">
       {artifacts.map((artifact) => (
@@ -977,7 +1081,7 @@ function ArtifactList({ artifacts, onOpenArtifact }: { artifacts: ArtifactRespon
                 Open
               </button>
             )}
-            <button type="button" onClick={() => onOpenArtifact(artifact.downloadUrl)}>
+            <button type="button" onClick={() => onDownloadArtifact(artifact)}>
               Download
             </button>
           </div>
@@ -993,6 +1097,30 @@ function isAuthenticatedApiUrl(url: string): boolean {
     return parsed.origin === window.location.origin && (parsed.pathname.startsWith("/api/artifacts/") || parsed.pathname.startsWith("/api/materials/"));
   } catch {
     return url.startsWith("/api/artifacts/") || url.startsWith("/api/materials/");
+  }
+}
+
+function toArtifactViewPageUrl(url: string): string | null {
+  const artifactId = artifactIdFromViewUrl(url);
+  return artifactId ? `/artifacts/${artifactId}/view` : null;
+}
+
+function resolveArtifactViewPath(pathname: string): string | null {
+  const normalizedPath = pathname.replace(/\/+$/, "") || "/";
+  const explicitMatch = /^\/artifacts\/([0-9a-fA-F-]{36})\/view$/.exec(normalizedPath);
+  if (explicitMatch?.[1]) return `/api/artifacts/${explicitMatch[1]}/view`;
+
+  const bareMatch = /^\/([0-9a-fA-F-]{36})$/.exec(normalizedPath);
+  return bareMatch?.[1] ? `/api/artifacts/${bareMatch[1]}/view` : null;
+}
+
+function artifactIdFromViewUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url, window.location.href);
+    if (parsed.origin !== window.location.origin) return null;
+    return /^\/api\/artifacts\/([0-9a-fA-F-]{36})\/view$/.exec(parsed.pathname)?.[1] ?? null;
+  } catch {
+    return /^\/api\/artifacts\/([0-9a-fA-F-]{36})\/view$/.exec(url)?.[1] ?? null;
   }
 }
 
@@ -1116,6 +1244,27 @@ function getChatTitle(chat: ChatResponse): string {
 function getChatPreview(chat: ChatResponse): string {
   const lastMessage = chat.messages.at(-1);
   return lastMessage ? truncate(lastMessage.originalText.replace(/\s+/g, " ").trim(), 88) : "No messages yet";
+}
+
+function extractRenderableHtml(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const fenced = /^```html\s*\n([\s\S]*?)\n```$/i.exec(trimmed);
+  if (fenced?.[1] && looksLikeHtml(fenced[1])) {
+    return fenced[1].trim();
+  }
+
+  return looksLikeHtml(trimmed) ? trimmed : null;
+}
+
+function looksLikeHtml(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  return /^<!doctype\s+html/i.test(trimmed) ||
+    /^<html[\s>]/i.test(trimmed) ||
+    /^<body[\s>]/i.test(trimmed) ||
+    /^<(main|section|article|div|style|script|canvas|svg|form|table)[\s>]/i.test(trimmed);
 }
 
 function truncate(value: string, length: number): string {

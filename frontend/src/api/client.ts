@@ -142,6 +142,40 @@ export async function openAuthenticatedDownload(url: string): Promise<void> {
   setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
 }
 
+export async function downloadAuthenticatedFile(url: string, fileName?: string): Promise<void> {
+  const response = await fetch(apiUrl(url), { headers: authHeader() });
+  if (!response.ok) {
+    throw await parseAndHandleApiError(response, "download_error");
+  }
+
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = fileName?.trim() || fileNameFromContentDisposition(response.headers.get("Content-Disposition")) || "download";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+}
+
+export async function readAuthenticatedText(url: string): Promise<string> {
+  const response = await fetch(apiUrl(url), { headers: authHeader() });
+  if (!response.ok) {
+    throw await parseAndHandleApiError(response, "read_error");
+  }
+
+  return response.text();
+}
+
+function fileNameFromContentDisposition(value: string | null): string | null {
+  if (!value) return null;
+  const utf8Match = /filename\*=UTF-8''([^;]+)/i.exec(value);
+  if (utf8Match?.[1]) return decodeURIComponent(utf8Match[1].trim().replace(/^"|"$/g, ""));
+  const asciiMatch = /filename="?([^";]+)"?/i.exec(value);
+  return asciiMatch?.[1]?.trim() || null;
+}
+
 export const streamPaths = {
   create: "/api/chats/with-agent/stream",
   continue: (chatId: string) => `/api/chats/${chatId}/continue/stream`

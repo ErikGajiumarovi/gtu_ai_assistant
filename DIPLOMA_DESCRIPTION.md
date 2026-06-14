@@ -637,17 +637,21 @@ Persistence layer имеет две реализации: in-memory и PostgreSQ
 
 ### 5.2. Реализация agentic pipeline
 
-В текущей версии проекта agentic pipeline реализован классом `AgentGenerateMessagePortImpl`. Важно отметить границу фактической реализации: приложение не использует автономный LLM function-calling loop, где модель сама решает, какой tool вызвать, получает результат и повторяет цикл. Вместо этого реализована серверная agentic orchestration: backend сам выполняет необходимые tool-вызовы на основе выбранных пользователем источников, затем собирает контекст и передает его LLM. Такой подход проще контролировать, легче тестировать и безопаснее для учебного приложения, потому что модель не получает прямой возможности произвольно выбирать инструменты.
+В проекте agentic pipeline реализован классом `AgentGenerateMessagePortImpl` как полноценный tool-calling agent loop на базе Koog `AIAgent`. Порядок действий формируется внутри agent loop: модель получает список доступных tools, сама выбирает нужные вызовы, получает результаты через backend и может продолжать цикл до тех пор, пока не сформирует финальный ответ.
 
-При этом в коде используются сущности, которые по смыслу выполняют роль tools:
+Ключевая идея реализации состоит в разделении ролей. LLM отвечает за reasoning и выбор следующего действия, а backend контролирует, какие tools вообще доступны, какие параметры принимает каждый tool и как безопасно исполняется запрос. Поэтому agentic loop является полноценным, но не произвольным: модель может вызывать только зарегистрированные функции, привязанные к выбранным пользователем источникам и настройкам приложения.
 
-1. `GtuKnowledgeSearchTool` - поиск по встроенной базе знаний GTU.
-2. `UserMaterialSearchTool` - поиск и подготовка контекста по пользовательским материалам.
-3. `GtuWebSearchTool` - прямой web-поиск по разрешенным GTU-страницам.
-4. `AgentArtifactService` - определение намерения создать файл и создание артефакта.
-5. `AgentSpaceClient` - изолированный вызов Python, shell или Node.js в сервисе agent_space, фактически используемый для DOCX и PNG-артефактов.
+В `AgentToolRuntime.toolRegistry()` регистрируются следующие tools:
 
-`GtuPageOpenTool` присутствует в кодовой базе, но в текущем `appModule` не подключен и в `AgentGenerateMessagePortImpl` не используется. Поэтому он не является активной частью текущего agent pipeline.
+1. `current_time` - возвращает текущее серверное время в ISO-8601.
+2. `gtu_knowledge_search` - ищет фрагменты во встроенной базе знаний GTU, если выбран источник `gtu`.
+3. `uploaded_materials_search` - ищет по выбранным пользовательским материалам и возвращает inventory документов, если выбран источник `materials`.
+4. `web_search` - ищет по разрешенным публичным web-страницам, если выбран источник `web`.
+5. `artifact_create` - создает downloadable artifact, если в dependency graph подключен `AgentArtifactService`.
+
+Таким образом набор tools является динамическим. Если пользователь выключил GTU, материалы или web, соответствующий tool не попадает в registry, и модель не может использовать этот источник. Это важно для соблюдения source policy: ограничения источников реализованы не только в prompt, но и на уровне фактически доступных функций.
+
+`GtuPageOpenTool` присутствует в кодовой базе, но в текущем `appModule` не подключен и в `AgentToolRuntime.toolRegistry()` не регистрируется. Поэтому он не является активной частью текущего agent pipeline.
 
 #### 5.2.1. Общая схема agentic pipeline
 
@@ -657,48 +661,45 @@ Persistence layer имеет две реализации: in-memory и PostgreSQ
 flowchart TB
     Request["GenerateMessageCommand"]
     Validate["Validate message history and source selection"]
-    GtuTool["GtuKnowledgeSearchTool"]
-    MaterialTool["UserMaterialSearchTool"]
-    WebDecision["Check local confidence and time-sensitive query"]
-    WebTool["GtuWebSearchTool"]
-    Merge["Merge, deduplicate, limit sources"]
-    Intent["Detect artifact intent"]
-    ArtifactKind{"Artifact requested?"}
-    DraftNeeded{"Draft needed?"}
-    DraftSubAgent["document-writing sub-agent prompt"]
-    RenderDecision{"Artifact renderer"}
-    DirectArtifact["Direct TEXT / HTML creation"]
-    AgentSpace["agent_space render for DOCX / CHART"]
-    PromptBuild["Build system prompt with source rules"]
-    Llm["LLM call"]
+    Runtime["AgentToolRuntime"]
+    Registry["ToolRegistry from selected sources"]
+    Prompt["System prompt + chat history"]
+    Agent["Koog AIAgent"]
+    Llm["Streaming LLM request"]
+    ToolCalls{"Tool calls?"}
+    Execute["nodeExecuteMultipleTools parallelTools=true"]
+    ToolResults["Append tool results to LLM session"]
+    Final["Assistant final message"]
+    Snapshot["sourcesSnapshot / artifactsSnapshot"]
     Message["Domain AI message with citations and artifacts"]
 
     Request --> Validate
-    Validate --> GtuTool
-    Validate --> MaterialTool
-    GtuTool --> WebDecision
-    MaterialTool --> WebDecision
-    WebDecision --> WebTool
-    WebDecision --> Merge
-    WebTool --> Merge
-    Merge --> Intent
-    Intent --> ArtifactKind
-    ArtifactKind -->|no| PromptBuild
-    ArtifactKind -->|yes| DraftNeeded
-    DraftNeeded -->|yes| DraftSubAgent
-    DraftSubAgent --> RenderDecision
-    DraftNeeded -->|chart| AgentSpace
-    RenderDecision -->|TEXT / HTML| DirectArtifact
-    RenderDecision -->|DOCX| AgentSpace
-    DirectArtifact --> PromptBuild
-    AgentSpace --> PromptBuild
-    PromptBuild --> Llm
-    Llm --> Message
+    Validate --> Runtime
+    Runtime --> Registry
+    Validate --> Prompt
+    Registry --> Agent
+    Prompt --> Agent
+    Agent --> Llm
+    Llm --> ToolCalls
+    ToolCalls -->|yes| Execute
+    Execute --> ToolResults
+    ToolResults --> Llm
+    ToolCalls -->|no| Final
+    Final --> Snapshot
+    Snapshot --> Message
 ```
 
 Входом в pipeline является `GenerateMessageCommand`. Он содержит историю сообщений, id пользователя, выбранные источники `ChatSources`, список выбранных коллекций и список выбранных документов. Такой объект создается application use case на основе HTTP-запроса.
 
-Для обычного ответа вызывается метод `invoke`, для stream-ответа - метод `stream`. Оба метода используют одинаковую логику подготовки контекста, генерации артефактов и построения доменного сообщения. Отличие находится только в способе обращения к LLM: обычный режим использует Koog executor, а streaming режим отправляет HTTP-запрос к OpenAI-compatible `/chat/completions` с `stream=true` и вручную читает SSE-строки.
+Для обычного ответа вызывается метод `invoke`, для stream-ответа - метод `stream`. Оба метода используют один и тот же agent loop через `executeAgent`. Отличие только в callback-ах: в streaming режиме наружу передаются token delta и статусы tool-вызовов, а в обычном режиме callbacks пустые.
+
+Agent создается в `createToolCallingAgent`. Для него задаются:
+
+1. `RoutingLLMPromptExecutor` с round-robin выбором API key.
+2. `LLModel` с OpenAI-compatible provider, моделью из конфигурации и context length `128000`.
+3. `AIAgentConfig` с `maxAgentIterations = 100`.
+4. `ToolRegistry`, созданный из выбранных источников.
+5. Strategy `gtu_agent_tool_loop`, которая реализует цикл LLM/tool/result.
 
 #### 5.2.2. Валидация входа
 
@@ -715,7 +716,9 @@ Pipeline начинается с проверки истории через `val
 
 #### 5.2.3. Tool: поиск по базе знаний GTU
 
-Если в `ChatSources` включен источник `gtu`, backend вызывает `GtuKnowledgeSearchTool.search(latestUserText)`. Tool создает `KnowledgeSearchQuery` с текстом запроса, лимитом результатов и минимальным score `0.22`, а затем вызывает порт `SearchKnowledgePort`.
+Если в `ChatSources` включен источник `gtu`, в registry добавляется tool `gtu_knowledge_search`. Модель вызывает его сама, когда ей нужна проверенная публичная информация GTU. Tool принимает query и `maxResults`; если query пустой, backend использует текст последнего пользовательского сообщения.
+
+Внутри tool вызывает `GtuKnowledgeSearchTool.search`. Он создает `KnowledgeSearchQuery` с текстом запроса, лимитом результатов и минимальным score `0.22`, а затем вызывает порт `SearchKnowledgePort`.
 
 В PostgreSQL-режиме этот порт реализован как `SearchKnowledgePortImpl`. Он строит embedding вопроса, загружает кандидаты из `knowledge_chunks`, считает гибридный score и возвращает `KnowledgeSearchHit`. Tool преобразует эти hits в `AgentSource` со следующими данными:
 
@@ -725,11 +728,11 @@ Pipeline начинается с проверки истории через `val
 4. `score` - итоговая оценка релевантности;
 5. `sourceType=RAG` - тип цитаты для ответа.
 
-Если поиск завершился ошибкой, `AgentGenerateMessagePortImpl` не прерывает весь ответ, а использует пустой список GTU-источников. Это видно в коде через `fold(ifLeft = { emptyList() }, ifRight = { it })`.
+Если поиск завершился ошибкой, tool возвращает в LLM текст вида `Error: GTU knowledge search failed: ...`. Это не прерывает весь agent loop. Модель видит ошибку как результат tool-вызова и должна объяснить пользователю, что выбранный источник не позволил подтвердить информацию.
 
 #### 5.2.4. Tool: поиск по пользовательским материалам
 
-Если включен источник `materials`, backend вызывает `UserMaterialSearchTool.resolve`. Этот tool делает больше, чем простой vector search, потому что должен учитывать состояние и структуру пользовательских документов.
+Если включен источник `materials`, в registry добавляется tool `uploaded_materials_search`. Модель вызывает его перед ответом по загруженным файлам. Этот tool делает больше, чем простой vector search, потому что должен учитывать состояние и структуру пользовательских документов.
 
 Порядок работы следующий:
 
@@ -741,19 +744,13 @@ Pipeline начинается с проверки истории через `val
 6. Выполняется vector/hybrid search через `SearchUserMaterialsPort`.
 7. Section sources и search sources объединяются и дедуплицируются.
 
-В результате tool возвращает `UserMaterialContext`. Он содержит не только найденные фрагменты, но и список выбранных документов. Это позволяет LLM объяснить пользователю, какие материалы доступны, какие из них еще не READY и почему не все документы можно использовать для factual claims.
+В результате tool возвращает в LLM текстовый блок `Uploaded material search results`. Он содержит не только найденные фрагменты, но и список выбранных документов. Это позволяет модели объяснить пользователю, какие материалы доступны, какие из них еще не READY и почему не все документы можно использовать для factual claims.
 
 Для найденных фрагментов создаются `AgentSource` с `sourceType=USER_MATERIAL`. URL имеет внутренний формат `material://...`, но при преобразовании citation в API response для пользовательского материала URL заменяется на endpoint скачивания `/api/materials/{id}/download`.
 
-#### 5.2.5. Tool: условный web search
+#### 5.2.5. Tool: web search
 
-Web search не вызывается всегда. В коде есть условие:
-
-```text
-shouldSearchWeb = web selected AND (no local score OR local score < 0.32 OR query is time-sensitive)
-```
-
-Это означает, что web-поиск включается только если пользователь разрешил web-источник и локальный контекст недостаточно уверен либо вопрос содержит признаки актуальности: `today`, `latest`, `current`, `deadline`, `news`, `now`, а также русские и грузинские аналоги.
+Если включен источник `web`, в registry добавляется tool `web_search`. Решение вызвать web tool принимает модель на основе user request, source policy и tool-calling rules. Prompt отдельно говорит использовать `web_search` для latest, current или web-grounded claims, если этот tool доступен.
 
 `GtuWebSearchTool` в режиме `DIRECT` работает так:
 
@@ -767,78 +764,121 @@ shouldSearchWeb = web selected AND (no local score OR local score < 0.32 OR quer
 8. Из body строится текстовый snippet и score.
 9. Возвращаются `AgentSource` с `sourceType=WEB`.
 
-Этот tool не является произвольным интернет-поиском. Он ограничен разрешенными доменами и sitemap/robots-политикой, что соответствует учебному сценарию и снижает риск попадания нерелевантных внешних источников.
+Этот tool не является произвольным интернет-поиском. Даже если модель решила вызвать `web_search`, backend ограничивает поиск разрешенными доменами, sitemap и robots-политикой. Это соответствует учебному сценарию и снижает риск попадания нерелевантных внешних источников.
 
-#### 5.2.6. Объединение sources и формирование citations
+#### 5.2.6. Agent loop и выполнение tool calls
 
-После выполнения локальных и web tools backend объединяет источники через `combineSources`. Приоритет в текущей реализации такой: пользовательские материалы, затем GTU sources, затем web sources. Сначала берутся первые два результата каждого выбранного источника, затем остальные. Это помогает не дать одному источнику полностью вытеснить другой.
+Сам agent loop описан в `streamingToolStrategy()` и имеет граф `gtu_agent_tool_loop`.
 
-Далее источники дедуплицируются по паре `url + snippet` и ограничиваются константой `MAX_SOURCES=6`. Позже из этих же sources создаются citations для доменного AI-сообщения. Citations дополнительно дедуплицируются по URL и также ограничиваются шестью элементами.
+Первый узел `stream_initial_llm` добавляет последнее пользовательское сообщение в LLM session и вызывает `requestStreamingAndSendResultsImpl`. Если модель сразу возвращает assistant message, loop завершается. Если модель возвращает один или несколько tool calls, управление переходит к `nodeExecuteMultipleTools(parallelTools = true)`.
+
+После выполнения tools узел `stream_tool_results` добавляет результаты обратно в LLM session как tool messages:
+
+```kotlin
+appendPrompt {
+    tool {
+        results.forEach { result(it) }
+    }
+}
+```
+
+Затем LLM вызывается повторно. Если после tool results модель снова запрашивает tools, цикл повторяется. Если модель возвращает assistant message, этот текст становится финальным ответом. Защита от бесконечного цикла задается `maxAgentIterations = 100`.
+
+Схема цикла:
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant A as AIAgent
+    participant L as LLM
+    participant T as ToolRegistry
+
+    U->>A: latest user message
+    A->>L: system prompt + history + user message + tools
+    L-->>A: tool calls or assistant message
+    alt tool calls
+        A->>T: execute selected tools in parallel
+        T-->>A: tool results
+        A->>L: append tool results
+        L-->>A: next tool calls or final answer
+    else final answer
+        A-->>U: assistant response
+    end
+```
+
+Для streaming frontend получает не только текстовые delta, но и статусы tool-вызовов. Через Koog event handler отправляются фазы `tool_call_started`, `tool_call_completed` и `tool_call_failed`. Поэтому пользователь видит, что агент не просто генерирует текст, а реально выполняет промежуточные действия.
+
+#### 5.2.7. Сбор sources и формирование citations
+
+Sources накапливаются во время реальных tool calls. Когда `gtu_knowledge_search`, `uploaded_materials_search` или `web_search` успешно возвращают sources, `AgentToolRuntime.rememberSources` сохраняет их во внутренний список.
+
+После завершения agent loop вызывается `sourcesSnapshot()`. Он дедуплицирует sources по паре `url + snippet` и ограничивает список константой `MAX_SOURCES=6`. Позже из этих же sources создаются citations для доменного AI-сообщения. Citations дополнительно дедуплицируются по URL и также ограничиваются шестью элементами.
 
 ```mermaid
 flowchart LR
-    Materials["Material sources"]
-    Gtu["GTU RAG sources"]
-    Web["Web sources"]
-    Combine["combineSources"]
+    Gtu["gtu_knowledge_search sources"]
+    Materials["uploaded_materials_search sources"]
+    Web["web_search sources"]
+    Remember["rememberSources"]
     Dedupe["distinct by url + snippet"]
     Limit["take MAX_SOURCES = 6"]
-    PromptContext["Allowed source excerpt context"]
     Citations["Message citations"]
 
-    Materials --> Combine
-    Gtu --> Combine
-    Web --> Combine
-    Combine --> Dedupe
+    Gtu --> Remember
+    Materials --> Remember
+    Web --> Remember
+    Remember --> Dedupe
     Dedupe --> Limit
-    Limit --> PromptContext
     Limit --> Citations
 ```
 
-#### 5.2.7. Prompt assembly и grounding rules
+#### 5.2.8. Prompt assembly и tool-calling rules
 
-После подготовки sources создается `PreparedGeneration`. Он отвечает за сборку system prompt. Финальный prompt состоит из нескольких частей:
+Перед запуском агента создается history prompt `generate-gtu-agent-message`. Он состоит из system message и последних сообщений истории, максимум `MAX_HISTORY_MESSAGES=20`. Последнее пользовательское сообщение не добавляется в history prompt сразу, а передается в `agent.run(conversation.userMessage)`, чтобы agent strategy могла добавить его в LLM session как новый user input.
+
+System prompt собирается функцией `ChatSources.agentSystemPrompt()` и состоит из нескольких частей:
 
 1. Базовый `SYSTEM_PROMPT` ассистента GTU.
 2. Правила выбранных источников из `ChatSources.promptRules()`.
-3. Контекст пользовательских материалов из `UserMaterialContext.toContextBlock()`.
-4. Фрагменты найденных источников из `sources.toContextBlock()`.
-5. Контекст созданного артефакта, если артефакт был создан до финального ответа.
+3. Tool-calling rules, которые объясняют модели, когда вызывать tools.
 
 Базовый prompt задает роль ассистента: помогать студентам Georgian Technical University, отвечать на языке пользователя, не переинтерпретировать GTU как другой университет, не выдумывать deadlines, prices, contacts, rules или personal student data. Также prompt явно перечисляет возможности приложения: source-grounded chat, uploaded user materials, optional web context и generated artifacts.
 
 Правила источников зависят от выбора пользователя. Если какой-либо источник выключен, prompt прямо запрещает использовать этот источник и general knowledge для factual claims. Если включены только пользовательские материалы, prompt требует сказать, что загруженные материалы не содержат достаточно информации, если они действительно не дают ответа.
 
-Если найденных excerpts нет, `toContextBlock()` добавляет в prompt явную инструкцию: factual information cannot be confirmed from the allowed source excerpts. Это снижает вероятность hallucination, потому что отсутствие контекста тоже передается модели как часть инструкций.
+Tool-calling rules явно говорят модели:
 
-#### 5.2.8. Обращение к LLM в обычном режиме
+1. У нее есть реальные function tools, и она должна использовать их для source-grounded factual information, uploaded-material content, current/web information, exact current time и file creation.
+2. Для GTU factual claims нужно вызывать `gtu_knowledge_search`, если tool доступен и ответ не подтвержден историей.
+3. Для uploaded files нужно вызывать `uploaded_materials_search` перед ответом из материалов.
+4. Для latest/current/web-grounded claims нужно вызывать `web_search`, если tool доступен.
+5. Если нужный source tool недоступен из-за выбора пользователя, нужно сказать, что выбранные источники не позволяют проверить информацию.
+6. Если tool не нашел evidence, нельзя выдумывать детали.
+7. `artifact_create` вызывается только при явном запросе на создание, сохранение, экспорт, загрузку, подготовку, рисование или генерацию файла.
+8. Независимые tool calls желательно запрашивать в одном tool-calling step.
 
-В обычном, не потоковом режиме `executeLlm` использует Koog DSL:
+#### 5.2.9. Обращение к LLM и streaming
+
+Обычный и streaming режимы используют общий Koog `AIAgent` и `requestStreamingAndSendResultsImpl`. Поэтому streaming является частью agent strategy, а не отдельной ручной реализацией SSE.
+
+Порядок обращения к LLM следующий:
 
 1. Создается prompt `generate-gtu-agent-message`.
 2. В prompt добавляется system message с подготовленным контекстом.
 3. Добавляются последние сообщения истории, максимум `MAX_HISTORY_MESSAGES=20`.
 4. Для сообщений пользователя вызывается `user(...)`, для сообщений ассистента - `assistant(...)`.
-5. Выбирается API key через `AiApiKeySelector`.
-6. Вызывается `SingleLLMPromptExecutor.execute(llmPrompt, model)`.
-7. Из ответа извлекаются assistant messages.
-8. Результат trim-ится и проверяется на непустую строку.
+5. Для OpenAI chat params включается `parallelToolCalls = true`.
+6. Создается `AIAgent` с tool registry и strategy `gtu_agent_tool_loop`.
+7. Агент запускается через `agent.run(conversation.userMessage)`.
+8. LLM может вернуть assistant message либо tool calls.
+9. Tool calls выполняются, результаты добавляются обратно в session, после чего LLM вызывается снова.
+10. Финальный assistant text trim-ится и проверяется на непустую строку.
 
 LLM model создается как `LLModel` с provider `OpenAI`, id из `APP_AI_MODEL`, capabilities `Completion` и `OpenAIEndpoint.Completions`, context length `128000`. Клиентом выступает `OpenAILLMClient` с `OpenAIClientSettings(baseUrl = config.baseUrl)`. Таким образом backend работает с OpenAI-compatible API, а конкретный provider задается конфигурацией.
 
-`AiApiKeySelector` поддерживает несколько API keys. Он хранит список ключей и выдает следующий ключ по round-robin через `AtomicInteger`. Это не полноценный retry/failover механизм, но позволяет распределять последовательные запросы между несколькими ключами, если они заданы в `APP_AI_API_KEYS`.
+Несколько API keys поддерживаются через `RoutingLLMPromptExecutor(RoundRobinRouter(clients))`. Для каждого ключа создается отдельный `OpenAILLMClient`, а router распределяет последовательные LLM-вызовы между клиентами.
 
-#### 5.2.9. Обращение к LLM в streaming режиме
-
-Streaming режим реализован отдельно, без Koog executor. Метод `executeLlmStream` вручную формирует JSON для OpenAI-compatible `/chat/completions`:
-
-1. `model` - id модели;
-2. `stream=true`;
-3. `messages` - system message и последние сообщения истории.
-
-Затем backend отправляет POST-запрос на URL, который строится из `config.baseUrl`. Если base URL не заканчивается на `/v1`, к нему добавляется `/v1`, затем добавляется `/chat/completions`.
-
-Ответ читается как поток строк. Каждая строка с префиксом `data: ` разбирается как JSON. Backend извлекает `choices[0].delta.content`, отправляет этот fragment в callback `onToken` и добавляет его в `StringBuilder`. Когда приходит `[DONE]`, чтение завершается. После этого собранный текст проверяется на непустоту и используется для создания доменного AI-сообщения.
+В streaming режиме token delta отправляются наружу через Koog event `onLLMStreamingFrameReceived`. Если приходит `StreamFrame.TextDelta`, backend вызывает `onToken(frame.text)`. Статусы tool-вызовов отправляются через `onToolCallStarting`, `onToolCallCompleted` и `onToolCallFailed`.
 
 ```mermaid
 sequenceDiagram
@@ -846,17 +886,23 @@ sequenceDiagram
     participant R as Ktor route
     participant U as Use case
     participant A as AgentGenerateMessagePortImpl
+    participant T as Koog tools
     participant L as OpenAI-compatible LLM
 
     F->>R: POST /stream
     R->>U: stream(command, onToken, onStatus)
     U->>A: GenerateMessagePort.stream
-    A-->>R: status: thinking/search/context_ready
-    A->>L: POST /v1/chat/completions stream=true
+    A-->>R: status: thinking
+    A->>L: streaming LLM request with tool registry
+    L-->>A: tool calls
+    A-->>R: status: tool_call_started
+    A->>T: execute tools
+    T-->>A: tool results
+    A-->>R: status: tool_call_completed
+    A->>L: tool results appended to session
     L-->>A: data: delta.content
     A-->>R: onToken(content)
     R-->>F: {"t":"..."}
-    L-->>A: data: [DONE]
     A-->>U: Domain AI message
     U-->>R: saved Chat
     R-->>F: {"d": ChatResponse}
@@ -871,17 +917,25 @@ sequenceDiagram
 3. `senderType` равен `AI`.
 4. `createdAt` выбирается как текущее время, но не раньше чем `lastUserMessage.createdAt + 1 ms`.
 5. `citations` создаются из найденных `AgentSource`.
-6. `artifacts` добавляются, если в процессе был создан артефакт.
+6. `artifacts` добавляются, если в процессе agent loop был вызван `artifact_create` и файл был успешно создан.
 
 Это сообщение возвращается в application use case. Use case уже отвечает за сохранение нового или обновленного чата.
 
-### 5.3. Sub-agent и генерация артефактов
+### 5.3. Tool-driven генерация артефактов
 
-В проекте есть ограниченный sub-agent подход, связанный с созданием артефактов. Это не сеть автономных агентов и не multi-agent handoff. Реально реализован один дополнительный LLM-шаг с отдельной ролью `document-writing sub-agent`, который используется для подготовки Markdown draft перед созданием TEXT, HTML или DOCX артефактов.
+Генерация артефактов является частью общего agentic loop и выполняется через function tool `artifact_create`. Модель сама решает, нужно ли создавать файл, и вызывает tool только при явном пользовательском запросе на create/save/export/download/prepare/draw/plot/generate.
 
-#### 5.3.1. Определение намерения создать артефакт
+Артефакт создается как действие внутри reasoning loop. Модель может сначала вызвать source tools, затем на основе найденного контекста вызвать `artifact_create`, получить подтверждение о созданном файле и только после этого сформировать финальный ответ пользователю.
 
-После поиска источников backend вызывает `artifactService.detectIntent(latestUserText)`. Метод основан на простых keyword rules. Он ищет слова вроде `создай`, `сделай`, `сгенерируй`, `нарисуй`, `построй`, `export`, `download`, а также расширения `.docx`, `.html`, `.txt`, `.md`, `.csv`, `.json`, `.png`.
+#### 5.3.1. Tool `artifact_create`
+
+В agent pipeline intent определяется самой моделью через tool-calling. В prompt есть правило: `artifact_create` можно вызывать только когда пользователь явно просит создать, сохранить, экспортировать, скачать, подготовить, нарисовать, построить или сгенерировать файл.
+
+Tool `artifact_create` принимает:
+
+1. `kind` - `text`, `html`, `docx` или `chart`.
+2. `content` - полный Markdown-контент для `text`, `html`, `docx` либо brief/prompt для `chart`.
+3. `fileName` - опциональное имя файла.
 
 Поддерживаются четыре вида артефактов:
 
@@ -890,69 +944,73 @@ sequenceDiagram
 3. `DOCX` - Word document.
 4. `CHART` - PNG chart.
 
-Для `TEXT`, `HTML` и `DOCX` нужен draft. Для `CHART` draft не нужен: chart строится Python-кодом на основе чисел, найденных в prompt.
+Для `TEXT`, `HTML` и `DOCX` нужен content, который модель передает прямо в tool call. Backend превращает его в `ArtifactDraft`. Для `CHART` draft не нужен: chart строится Python-кодом на основе чисел, найденных в переданном prompt.
 
-#### 5.3.2. Document-writing sub-agent
+#### 5.3.2. Создание артефакта через tool call
 
-Если intent требует draft, вызывается `executeArtifactDraft`. Этот метод создает отдельный prompt `generate-gtu-artifact-draft`. В system message явно задается роль:
+Метод `AgentToolRuntime.artifactCreate` нормализует `kind`, проверяет поддерживаемый тип и создает `ArtifactIntent`. Если передан `fileName`, backend очищает его через `normalizeArtifactFileName`: имя ограничивается по длине, не должно содержать `/`, `\`, `..` или управляющие символы, а расширение приводится к ожидаемому.
 
-```text
-You are a document-writing sub-agent for GTU AI Assistant.
-```
+Для `TEXT`, `HTML` и `DOCX` tool content превращается в `ArtifactDraft.fromMarkdown`. Заголовок берется из первого Markdown heading `# ...`; если его нет, используется fallback title по типу артефакта.
 
-Этот sub-agent получает latest user request, grounding rules, контекст пользовательских материалов и найденные source excerpts. Его задача - написать полный Markdown-контент будущего файла, а не финальный ответ пользователю. Prompt требует вернуть только Markdown, не оборачивать его в code fence и не упоминать download links.
-
-Далее используется тот же LLM executor и та же модель, что и для основного ответа. Результат очищается от возможного Markdown fence, проверяется на непустоту и превращается в `ArtifactDraft`. Заголовок берется из первого Markdown heading `# ...`; если его нет, используется fallback title по типу артефакта.
+Затем вызывается `AgentArtifactService.createArtifact`. Если создание прошло успешно, runtime сохраняет артефакт через `rememberArtifacts`, а tool возвращает модели artifact context с именем файла, content type, размером, download/open links и строкой verification.
 
 ```mermaid
 flowchart TB
-    UserRequest["Latest user request"]
-    Sources["Allowed sources and material context"]
-    DraftPrompt["document-writing sub-agent prompt"]
-    LlmDraft["LLM draft generation"]
-    Markdown["ArtifactDraft: title + markdown"]
+    UserRequest["User asks to create/export file"]
+    Agent["LLM agent"]
+    ToolCall["artifact_create(kind, content, fileName)"]
+    Intent["ArtifactIntent"]
+    Draft["ArtifactDraft from tool content"]
+    Service["AgentArtifactService.createArtifact"]
+    Context["Artifact context returned to LLM"]
+    Final["Final answer with links"]
 
-    UserRequest --> DraftPrompt
-    Sources --> DraftPrompt
-    DraftPrompt --> LlmDraft
-    LlmDraft --> Markdown
+    UserRequest --> Agent
+    Agent --> ToolCall
+    ToolCall --> Intent
+    Intent --> Draft
+    Draft --> Service
+    Service --> Context
+    Context --> Final
 ```
 
 #### 5.3.3. agent_space как изолированный renderer
 
-После получения draft вызывается `AgentArtifactService.createArtifact`. Для `TEXT` и `HTML` артефактов Python не нужен: Markdown напрямую сохраняется как файл, либо преобразуется в простую HTML-страницу.
+Для `TEXT` и `HTML` артефактов Python не нужен: Markdown напрямую сохраняется как файл, либо преобразуется в простую HTML-страницу.
 
 Для `DOCX` и `CHART` используется `AgentSpaceClient`. Он отправляет HTTP POST на `/run` сервиса agent_space. В запросе указываются:
 
-1. `mode` - в текущих artifact-сценариях используется `python`;
-2. `code` - Python-код, сгенерированный backend;
-3. `timeoutSeconds` - для artifact rendering используется 60 секунд;
+1. `mode` - в текущих artifact-сценариях используется `python`.
+2. `code` - Python-код, сгенерированный backend.
+3. `timeoutSeconds` - для artifact rendering используется 60 секунд.
 4. `artifactPaths` - ожидаемый путь выходного файла.
 
 Для DOCX backend генерирует Python-код с `python-docx`. В код передается base64-закодированный title и Markdown draft. Скрипт создает Word-документ, преобразует Markdown heading в заголовки, bullet lines в `List Bullet`, numbered lines в `List Number`, выставляет шрифт Arial 11 pt и сохраняет `assistant-document.docx`.
 
 Для CHART backend генерирует Python-код с matplotlib. Из исходного prompt извлекаются числа; если чисел нет, используются значения по умолчанию. Скрипт строит bar chart и сохраняет `assistant-chart.png`.
 
-agent_space возвращает список artifacts, где содержимое файла передается в base64. Backend декодирует base64, сохраняет файл через `StoreGeneratedArtifactPort`, формирует download URL и, если artifact является viewable HTML, view URL.
+agent_space возвращает список artifacts, где содержимое файла передается в base64. Backend декодирует base64, проверяет размер, сохраняет файл через `StoreGeneratedArtifactPort`, формирует download URL и, если artifact является viewable HTML, view URL.
 
 #### 5.3.4. Связь артефакта с финальным ответом
 
-Создание артефакта происходит до финального LLM-ответа. После создания `ArtifactGenerationResult` добавляется в prompt как `Artifact context`. В нем указано, что файл уже создан, его имя, content type, размер и download/open links. Базовый system prompt дополнительно говорит модели: если artifact context присутствует, надо упомянуть ссылки и кратко описать созданный файл.
+Создание артефакта происходит до финального LLM-ответа, но не через отдельную сборку prompt. `ArtifactGenerationResult.context` возвращается как результат tool call `artifact_create`. В нем указано, что файл уже создан, его имя, content type, размер и download/open links. Базовый system prompt дополнительно говорит модели: если `artifact_create` вернул artifact context, надо упомянуть ссылки и кратко описать созданный файл.
 
-Это означает, что финальный ответ пользователя не создает файл сам по себе. Файл создает backend, а LLM только объясняет пользователю результат и дает ссылки, которые уже существуют.
+Это означает, что финальный ответ пользователя не создает файл сам по себе. Файл создает backend во время tool call, а LLM после получения результата только объясняет пользователю результат и дает ссылки, которые уже существуют.
 
 ```mermaid
 flowchart TB
-    Detect["Detect artifact intent"]
-    NeedsDraft{"Needs draft?"}
-    Draft["LLM document-writing sub-agent"]
+    UserIntent["User explicitly asks for a file"]
+    ToolCall["LLM calls artifact_create"]
+    NeedsDraft{"TEXT / HTML / DOCX?"}
+    Draft["ArtifactDraft from tool content"]
     TextHtml["TEXT / HTML direct creation"]
     Python["Python render in agent_space"]
     Store["Store artifact metadata and bytes"]
-    Context["Artifact context in final prompt"]
+    Context["Artifact context as tool result"]
     FinalAnswer["Final LLM answer mentions links"]
 
-    Detect --> NeedsDraft
+    UserIntent --> ToolCall
+    ToolCall --> NeedsDraft
     NeedsDraft -->|yes| Draft
     NeedsDraft -->|no, chart| Python
     Draft --> TextHtml
@@ -965,14 +1023,14 @@ flowchart TB
 
 ### 5.4. Ограничения текущей agentic реализации
 
-Текущая реализация достаточно практична для образовательного ассистента, но важно честно зафиксировать ее границы:
+Текущая реализация является полноценным agentic loop с function tools, но важно честно зафиксировать ее границы:
 
-1. Модель не выбирает tools самостоятельно через function calling.
-2. Нет цикла вида `LLM -> tool call -> tool result -> LLM -> next tool call`.
-3. Tool orchestration выполняется backend-кодом детерминированно по выбранным источникам и score локального поиска.
-4. `GtuPageOpenTool` не участвует в текущем pipeline, потому что не подключен в dependency graph.
-5. Sub-agent подход ограничен отдельным prompt для draft-содержимого артефакта.
-6. agent_space используется как изолированный executor/renderer, а не как самостоятельный reasoning-agent.
-7. Streaming LLM-вызов реализован вручную через OpenAI-compatible SSE, а не через Koog streaming abstraction.
+1. Модель выбирает tools сама, но только из backend-registered `ToolRegistry`; произвольные shell/Python/HTTP действия ей недоступны.
+2. Доступность source tools зависит от выбора пользователя: если источник выключен, соответствующий tool не регистрируется.
+3. Качество работы зависит от того, насколько корректно модель следует tool-calling rules и вызывает нужный tool перед factual claims.
+4. `GtuPageOpenTool` не участвует в текущем pipeline, потому что не подключен в dependency graph и не регистрируется в `AgentToolRuntime`.
+5. `agent_space` используется как изолированный executor/renderer для DOCX и PNG через backend-controlled `artifact_create`, а не как самостоятельный reasoning-agent и не как прямой tool для произвольного кода модели.
+6. Web search остается ограниченным разрешенными доменами, sitemap и robots rules; это не общий поиск по интернету.
+7. У agent loop есть верхняя граница `maxAgentIterations = 100`, чтобы защититься от бесконечных циклов tool calls.
 
 Эти ограничения не являются ошибкой архитектуры. Наоборот, они делают систему более предсказуемой: источники контролируются backend-ом, пользовательские данные изолированы, prompt явно ограничивает factual claims, а выполнение кода для артефактов вынесено в отдельный контейнер с ограничениями.

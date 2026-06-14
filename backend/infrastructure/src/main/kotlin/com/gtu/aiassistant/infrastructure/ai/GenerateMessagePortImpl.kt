@@ -3,7 +3,8 @@ package com.gtu.aiassistant.infrastructure.ai
 import ai.koog.prompt.dsl.prompt
 import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
-import ai.koog.prompt.executor.llms.SingleLLMPromptExecutor
+import ai.koog.prompt.executor.llms.RoundRobinRouter
+import ai.koog.prompt.executor.llms.RoutingLLMPromptExecutor
 import ai.koog.prompt.llm.LLMCapability
 import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
@@ -26,8 +27,7 @@ import java.time.Instant
 import java.util.UUID
 
 class GenerateMessagePortImpl private constructor(
-    private val executors: List<SingleLLMPromptExecutor>,
-    private val apiKeySelector: AiApiKeySelector,
+    private val executor: RoutingLLMPromptExecutor,
     private val model: LLModel
 ) : GenerateMessagePort {
 
@@ -84,9 +84,8 @@ class GenerateMessagePortImpl private constructor(
             }
         }
 
-        val selectedApiKey = apiKeySelector.next()
         val rawResponse = Either.catch {
-            executors[selectedApiKey.index].execute(llmPrompt, model)
+            executor.execute(llmPrompt, model)
         }.mapLeft(::InfrastructureError).bind()
 
         val generatedText = Either.catch {
@@ -116,18 +115,16 @@ class GenerateMessagePortImpl private constructor(
         fun create(config: AiConfig): GenerateMessagePortImpl {
             val baseClient = HttpClient(CIO)
             val apiKeys = config.normalizedApiKeys()
-            val executors = apiKeys.map { apiKey ->
-                val client = OpenAILLMClient(
+            val clients = apiKeys.map { apiKey ->
+                OpenAILLMClient(
                     apiKey = apiKey,
                     settings = OpenAIClientSettings(baseUrl = config.baseUrl),
                     baseClient = baseClient
                 )
-                SingleLLMPromptExecutor(client)
             }
 
             return GenerateMessagePortImpl(
-                executors = executors,
-                apiKeySelector = AiApiKeySelector(apiKeys),
+                executor = RoutingLLMPromptExecutor(RoundRobinRouter(clients)),
                 model = LLModel(
                     provider = LLMProvider.OpenAI,
                     id = config.model,

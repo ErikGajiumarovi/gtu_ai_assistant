@@ -25,7 +25,7 @@ class AgentArtifactService(
     ): Either<InfrastructureError, ArtifactGenerationResult?> = either {
         val bytes = when (intent.kind) {
             ArtifactKind.TEXT -> requireDraft(intent, draft).markdown.toByteArray(StandardCharsets.UTF_8)
-            ArtifactKind.HTML -> requireDraft(intent, draft).toHtmlPage().toByteArray(StandardCharsets.UTF_8)
+            ArtifactKind.HTML -> requireDraft(intent, draft).toHtmlArtifact().toByteArray(StandardCharsets.UTF_8)
             ArtifactKind.DOCX, ArtifactKind.CHART -> {
                 val run = agentSpaceClient.runForArtifact(
                     mode = "python",
@@ -305,6 +305,35 @@ private fun ArtifactDraft.toHtmlPage(): String =
     <style>body{font-family:system-ui,sans-serif;max-width:860px;margin:40px auto;padding:0 20px;line-height:1.55;color:#172033}h1,h2,h3{line-height:1.2}pre{white-space:pre-wrap;background:#f5f5f5;padding:16px;border-radius:12px}</style></head>
     <body>${markdown.toHtmlBody()}</body></html>
     """.trimIndent()
+
+private fun ArtifactDraft.toHtmlArtifact(): String {
+    val normalized = markdown.stripMarkdownFence("html").trim()
+    return if (normalized.looksLikeHtmlDocument()) {
+        normalized
+    } else {
+        copy(markdown = normalized).toHtmlPage()
+    }
+}
+
+private fun String.stripMarkdownFence(language: String): String {
+    val trimmed = trim()
+    if (!trimmed.startsWith("```")) return this
+    val lines = trimmed.lines()
+    val firstLine = lines.firstOrNull()?.trim().orEmpty()
+    if (!firstLine.equals("```$language", ignoreCase = true) && firstLine != "```") return this
+    if (lines.lastOrNull()?.trim() != "```") return this
+    return lines.drop(1).dropLast(1).joinToString("\n")
+}
+
+private fun String.looksLikeHtmlDocument(): Boolean {
+    val trimmed = trimStart()
+    return trimmed.startsWith("<!doctype html", ignoreCase = true) ||
+        trimmed.startsWith("<html", ignoreCase = true) ||
+        trimmed.startsWith("<body", ignoreCase = true) ||
+        trimmed.startsWith("<main", ignoreCase = true) ||
+        trimmed.startsWith("<section", ignoreCase = true) ||
+        trimmed.startsWith("<div", ignoreCase = true)
+}
 
 private fun String.toHtmlBody(): String =
     lineSequence().joinToString("\n") { rawLine ->
