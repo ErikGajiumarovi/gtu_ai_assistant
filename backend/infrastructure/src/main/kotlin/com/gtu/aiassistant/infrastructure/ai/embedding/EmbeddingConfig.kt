@@ -6,16 +6,21 @@ data class EmbeddingConfig(
     val baseUrl: String,
     val model: String,
     val dimensions: Int
-)
+) {
+    fun profileFingerprint(): String =
+        "${mode.name.lowercase()}:${baseUrl.trim().trimEnd('/')}:${model.trim()}:${dimensions}"
+}
 
 enum class EmbeddingMode {
     HASH,
-    OPENAI;
+    OPENAI,
+    OLLAMA;
 
     companion object {
         fun from(raw: String?): EmbeddingMode =
             when (raw?.lowercase()) {
                 "openai" -> OPENAI
+                "ollama" -> OLLAMA
                 else -> HASH
             }
     }

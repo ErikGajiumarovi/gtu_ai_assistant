@@ -22,7 +22,8 @@ object PersistenceSchema {
                 MaterialDocumentsTable,
                 MaterialChunksTable,
                 MaterialIngestionJobsTable,
-                GeneratedArtifactsTable
+                GeneratedArtifactsTable,
+                AppSettingsTable
             )
 
             exec("ALTER TABLE chat_message_citations ADD COLUMN IF NOT EXISTS document_id varchar(36)")

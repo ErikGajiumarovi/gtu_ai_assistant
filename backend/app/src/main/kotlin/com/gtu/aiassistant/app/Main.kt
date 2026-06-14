@@ -118,6 +118,10 @@ import com.gtu.aiassistant.infrastructure.persistence.artifacts.ReadGeneratedArt
 import com.gtu.aiassistant.infrastructure.persistence.artifacts.StoreGeneratedArtifactPortImpl
 import com.gtu.aiassistant.infrastructure.persistence.config.DatabaseFactory
 import com.gtu.aiassistant.infrastructure.persistence.config.PersistenceConfig
+import com.gtu.aiassistant.infrastructure.persistence.embedding.DisabledEmbeddingProfileReindexService
+import com.gtu.aiassistant.infrastructure.persistence.embedding.EmbeddingProfileReindexReport
+import com.gtu.aiassistant.infrastructure.persistence.embedding.EmbeddingProfileReindexService
+import com.gtu.aiassistant.infrastructure.persistence.embedding.PostgresEmbeddingProfileReindexService
 import com.gtu.aiassistant.infrastructure.persistence.knowledge.SaveKnowledgeIngestionRunPortImpl
 import com.gtu.aiassistant.infrastructure.persistence.knowledge.SearchKnowledgePortImpl
 import com.gtu.aiassistant.infrastructure.persistence.knowledge.UpsertKnowledgeDocumentPortImpl
@@ -181,6 +185,10 @@ fun main() {
     }.koin
 
     seedDefaultUser(koin.get())
+    val embeddingProfileReport = syncEmbeddingProfile(koin.get())
+    if (embeddingProfileReport.changed && runtimeConfig.ragEnabled) {
+        reindexKnowledgeProfile(koin.get())
+    }
 
     koin.get<KnowledgeIngestionScheduler>().start()
     koin.get<MaterialIngestionScheduler>().start()
@@ -211,6 +219,40 @@ fun main() {
             )
         )
     }.start(wait = true)
+}
+
+private fun syncEmbeddingProfile(reindexService: EmbeddingProfileReindexService): EmbeddingProfileReindexReport =
+    runBlocking {
+        reindexService.sync().fold(
+            ifLeft = { error ->
+                error("Failed to synchronize embedding profile: $error")
+            },
+            ifRight = { report ->
+                if (report.changed) {
+                    println(
+                        "Embedding profile changed from ${report.previousFingerprint ?: "<none>"} " +
+                            "to ${report.currentFingerprint}; search indexes were reset for reindexing."
+                    )
+                }
+                report
+            }
+        )
+    }
+
+private fun reindexKnowledgeProfile(ingestionService: KnowledgeIngestionService) {
+    runBlocking {
+        ingestionService.ingestOnce().fold(
+            ifLeft = { error ->
+                error("Failed to reindex knowledge after embedding profile change: $error")
+            },
+            ifRight = { report ->
+                println(
+                    "Knowledge reindexed after embedding profile change: " +
+                        "fetched=${report.pagesFetched}, changed=${report.pagesChanged}, failed=${report.pagesFailed}."
+                )
+            }
+        )
+    }
 }
 
 private fun seedDefaultUser(registerUserUseCase: RegisterUserUseCase) {
@@ -407,6 +449,7 @@ private fun appModule(
             single<UpsertKnowledgeDocumentPort> { DisabledUpsertKnowledgeDocumentPort() }
             single<UpsertKnowledgeSourcesPort> { DisabledUpsertKnowledgeSourcesPort() }
             single<SaveKnowledgeIngestionRunPort> { DisabledSaveKnowledgeIngestionRunPort() }
+            single<EmbeddingProfileReindexService> { DisabledEmbeddingProfileReindexService(get()) }
         }
 
         PersistenceMode.POSTGRES -> {
@@ -470,6 +513,7 @@ private fun appModule(
                     DisabledSaveKnowledgeIngestionRunPort()
                 }
             }
+            single<EmbeddingProfileReindexService> { PostgresEmbeddingProfileReindexService(get(), get(), get()) }
         }
     }
 

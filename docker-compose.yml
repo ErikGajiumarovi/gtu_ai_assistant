@@ -64,6 +64,32 @@ services:
     networks:
       - agent_space_network
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: gtu-ai-assistant-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  ollama-pull-bge-m3:
+    image: ollama/ollama:latest
+    container_name: gtu-ai-assistant-ollama-pull-bge-m3
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    volumes:
+      - ollama_data:/root/.ollama
+    command: ["pull", "bge-m3"]
+
   backend:
     build:
       context: .
@@ -76,6 +102,8 @@ services:
         condition: service_healthy
       agent_space:
         condition: service_healthy
+      ollama-pull-bge-m3:
+        condition: service_completed_successfully
     environment:
       APP_HOST: 0.0.0.0
       APP_PORT: 8080
@@ -86,7 +114,10 @@ services:
       APP_CRAWLER_ENABLED: "true"
       APP_RAG_INGEST_ON_STARTUP: "true"
       APP_RAG_MAX_PAGES_PER_RUN: "250"
-      APP_EMBEDDING_MODE: hash
+      APP_EMBEDDING_MODE: ollama
+      APP_EMBEDDING_BASE_URL: http://ollama:11434
+      APP_EMBEDDING_MODEL: bge-m3
+      APP_EMBEDDING_DIMENSIONS: "1024"
       APP_WEB_SEARCH_MODE: direct
       APP_PERSISTENCE_MODE: postgres
       APP_DB_JDBC_URL: jdbc:postgresql://postgres:5432/gtu_ai_assistant
@@ -123,6 +154,7 @@ services:
 volumes:
   postgres_data:
   minio_data:
+  ollama_data:
 
 networks:
   default:

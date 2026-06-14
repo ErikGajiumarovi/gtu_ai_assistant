@@ -7,5 +7,6 @@ object EmbeddingPortFactory {
         when (config.mode) {
             EmbeddingMode.HASH -> HashingEmbeddingPort(config.dimensions)
             EmbeddingMode.OPENAI -> OpenAIEmbeddingPort(config, httpClient)
+            EmbeddingMode.OLLAMA -> OllamaEmbeddingPort(config, httpClient)
         }
 }
