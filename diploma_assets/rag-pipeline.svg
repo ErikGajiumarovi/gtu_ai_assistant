@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="360" viewBox="0 0 980 360" role="img" aria-labelledby="title desc">
+  <title id="title">RAG pipeline visualization</title>
+  <desc id="desc">Document ingestion, chunking, embedding, vector storage, query search, context building and LLM response.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#475569"/></marker>
+    <style>
+      .box { fill:#f8fafc; stroke:#475569; stroke-width:2; rx:16; }
+      .green { fill:#f0fdf4; stroke:#16a34a; stroke-width:2; rx:16; }
+      .blue { fill:#eff6ff; stroke:#2563eb; stroke-width:2; rx:16; }
+      .orange { fill:#fff7ed; stroke:#ea580c; stroke-width:2; rx:16; }
+      .text { font:600 16px Arial, sans-serif; fill:#0f172a; }
+      .small { font:13px Arial, sans-serif; fill:#334155; }
+      .line { stroke:#475569; stroke-width:2; fill:none; marker-end:url(#arrow); }
+    </style>
+  </defs>
+  <rect width="980" height="360" fill="#ffffff"/>
+  <text x="490" y="32" text-anchor="middle" class="text">Retrieval-Augmented Generation pipeline</text>
+
+  <rect x="40" y="80" width="135" height="70" class="box"/>
+  <text x="108" y="110" text-anchor="middle" class="text">Documents</text>
+  <text x="108" y="132" text-anchor="middle" class="small">GTU / uploads</text>
+
+  <rect x="215" y="80" width="135" height="70" class="box"/>
+  <text x="283" y="110" text-anchor="middle" class="text">Chunking</text>
+  <text x="283" y="132" text-anchor="middle" class="small">text fragments</text>
+
+  <rect x="390" y="80" width="135" height="70" class="blue"/>
+  <text x="458" y="110" text-anchor="middle" class="text">Embedding</text>
+  <text x="458" y="132" text-anchor="middle" class="small">bge-m3 / Ollama</text>
+
+  <rect x="565" y="80" width="135" height="70" class="green"/>
+  <text x="633" y="110" text-anchor="middle" class="text">pgvector</text>
+  <text x="633" y="132" text-anchor="middle" class="small">vector storage</text>
+
+  <rect x="215" y="220" width="135" height="70" class="orange"/>
+  <text x="283" y="250" text-anchor="middle" class="text">Question</text>
+  <text x="283" y="272" text-anchor="middle" class="small">user request</text>
+
+  <rect x="390" y="220" width="135" height="70" class="blue"/>
+  <text x="458" y="250" text-anchor="middle" class="text">Search</text>
+  <text x="458" y="272" text-anchor="middle" class="small">semantic + hybrid</text>
+
+  <rect x="565" y="220" width="135" height="70" class="box"/>
+  <text x="633" y="250" text-anchor="middle" class="text">Context</text>
+  <text x="633" y="272" text-anchor="middle" class="small">sources + citations</text>
+
+  <rect x="740" y="220" width="160" height="70" class="orange"/>
+  <text x="820" y="250" text-anchor="middle" class="text">LLM answer</text>
+  <text x="820" y="272" text-anchor="middle" class="small">grounded response</text>
+
+  <path d="M175 115 H215" class="line"/>
+  <path d="M350 115 H390" class="line"/>
+  <path d="M525 115 H565" class="line"/>
+  <path d="M350 255 H390" class="line"/>
+  <path d="M525 255 H565" class="line"/>
+  <path d="M700 255 H740" class="line"/>
+  <path d="M633 150 V200 C633 214 514 214 514 236" class="line"/>
+</svg>

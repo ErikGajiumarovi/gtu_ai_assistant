@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">Arrow Core visual mark</title>
+  <desc id="desc">Local visual mark for Arrow Core functional error handling with Either.</desc>
+  <defs>
+    <linearGradient id="g" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#7c3aed"/>
+      <stop offset="1" stop-color="#2563eb"/>
+    </linearGradient>
+  </defs>
+  <rect x="10" y="10" width="108" height="108" rx="28" fill="url(#g)"/>
+  <path d="M32 72 H78 L64 88 L73 97 L103 64 L73 31 L64 40 L78 56 H32 Z" fill="#ffffff"/>
+  <circle cx="36" cy="36" r="9" fill="#bfdbfe"/>
+  <circle cx="92" cy="92" r="9" fill="#ddd6fe"/>
+</svg>

@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="390" viewBox="0 0 980 390" role="img" aria-labelledby="title desc">
+  <title id="title">Ports and Adapters visualization</title>
+  <desc id="desc">Hexagonal architecture where application core depends on ports and external infrastructure is connected through adapters.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#334155"/></marker>
+    <style>
+      .adapter { fill:#fff7ed; stroke:#ea580c; stroke-width:2; rx:16; }
+      .port { fill:#eff6ff; stroke:#2563eb; stroke-width:2; rx:16; }
+      .core { fill:#f8fafc; stroke:#0f172a; stroke-width:2; }
+      .text { font:600 16px Arial, sans-serif; fill:#0f172a; }
+      .small { font:13px Arial, sans-serif; fill:#334155; }
+      .line { stroke:#334155; stroke-width:2; fill:none; marker-end:url(#arrow); }
+    </style>
+  </defs>
+  <rect width="980" height="390" fill="#ffffff"/>
+  <text x="490" y="34" text-anchor="middle" class="text">Hexagonal architecture: Ports and Adapters</text>
+
+  <polygon points="490,70 645,155 645,245 490,330 335,245 335,155" class="core"/>
+  <text x="490" y="178" text-anchor="middle" class="text">Application core</text>
+  <text x="490" y="202" text-anchor="middle" class="small">domain models</text>
+  <text x="490" y="224" text-anchor="middle" class="small">use cases</text>
+
+  <rect x="65" y="155" width="170" height="70" class="adapter"/>
+  <text x="150" y="184" text-anchor="middle" class="text">Incoming adapter</text>
+  <text x="150" y="206" text-anchor="middle" class="small">Ktor REST API</text>
+
+  <rect x="260" y="60" width="150" height="60" class="port"/>
+  <text x="335" y="86" text-anchor="middle" class="text">Input ports</text>
+  <text x="335" y="106" text-anchor="middle" class="small">use case API</text>
+
+  <rect x="570" y="60" width="150" height="60" class="port"/>
+  <text x="645" y="86" text-anchor="middle" class="text">Output ports</text>
+  <text x="645" y="106" text-anchor="middle" class="small">interfaces</text>
+
+  <rect x="745" y="75" width="170" height="60" class="adapter"/>
+  <text x="830" y="100" text-anchor="middle" class="text">PostgreSQL</text>
+  <text x="830" y="120" text-anchor="middle" class="small">persistence adapter</text>
+
+  <rect x="745" y="165" width="170" height="60" class="adapter"/>
+  <text x="830" y="190" text-anchor="middle" class="text">MinIO</text>
+  <text x="830" y="210" text-anchor="middle" class="small">storage adapter</text>
+
+  <rect x="745" y="255" width="170" height="60" class="adapter"/>
+  <text x="830" y="280" text-anchor="middle" class="text">LLM / Ollama</text>
+  <text x="830" y="300" text-anchor="middle" class="small">AI adapter</text>
+
+  <path d="M235 190 H335" class="line"/>
+  <path d="M380 120 L430 155" class="line"/>
+  <path d="M570 120 L545 155" class="line"/>
+  <path d="M645 105 H745" class="line"/>
+  <path d="M645 195 H745" class="line"/>
+  <path d="M645 285 H745" class="line"/>
+</svg>
