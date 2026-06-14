@@ -33,9 +33,17 @@ class AgentArtifactService(
                     artifactPath = intent.artifactPath,
                     timeoutSeconds = 60
                 ).bind()
-                val artifact = run.artifacts.firstOrNull()
+                ensureArtifactRunSucceeded(run, intent).bind()
+                val artifact = run.artifacts.firstOrNull { it.path == intent.artifactPath }
                     ?: raise(InfrastructureError(IllegalStateException("agent_space did not return artifact ${intent.artifactPath}")))
-                Base64.getDecoder().decode(artifact.base64)
+                if (artifact.sizeBytes <= 0) {
+                    raise(InfrastructureError(IllegalStateException("agent_space returned empty artifact ${intent.artifactPath}")))
+                }
+                val decodedBytes = Base64.getDecoder().decode(artifact.base64)
+                if (decodedBytes.size.toLong() != artifact.sizeBytes) {
+                    raise(InfrastructureError(IllegalStateException("agent_space artifact size mismatch for ${intent.artifactPath}")))
+                }
+                decodedBytes
             }
         }
         val artifact = storeGeneratedArtifactPort(
@@ -69,8 +77,21 @@ class AgentArtifactService(
                 appendLine("- ${messageArtifact.fileName} (${messageArtifact.contentType}, ${messageArtifact.sizeBytes} bytes)")
                 appendLine("- download: ${messageArtifact.downloadUrl}")
                 if (messageArtifact.viewUrl != null) appendLine("- open: ${messageArtifact.viewUrl}")
+                appendLine("- verified: file content was returned, decoded, size-checked, and stored successfully")
             }.trim()
         )
+    }
+}
+
+private fun ensureArtifactRunSucceeded(
+    run: AgentSpaceRunResponse,
+    intent: ArtifactIntent
+): Either<InfrastructureError, Unit> = either {
+    if (run.timedOut) {
+        raise(InfrastructureError(IllegalStateException("agent_space timed out while creating ${intent.artifactPath}: ${run.summary()}")))
+    }
+    if (run.exitCode != 0) {
+        raise(InfrastructureError(IllegalStateException("agent_space failed to create ${intent.artifactPath}: ${run.summary()}")))
     }
 }
 
@@ -180,6 +201,7 @@ data class ArtifactIntent(
             import base64
             from docx import Document
             from docx.shared import Pt
+            from pathlib import Path
 
             title = base64.b64decode(${draft.title.toBase64PythonStringLiteral()}).decode('utf-8')
             markdown = base64.b64decode(${draft.markdown.toBase64PythonStringLiteral()}).decode('utf-8')
@@ -237,7 +259,12 @@ data class ArtifactIntent(
                     run.font.name = 'Arial'
                     run.font.size = Pt(11)
 
-            document.save('assistant-document.docx')
+            output_path = Path('assistant-document.docx')
+            document.save(output_path)
+            size = output_path.stat().st_size
+            if size <= 0:
+                raise RuntimeError('assistant-document.docx was created empty')
+            print(f'created artifact: {output_path} ({size} bytes)')
         """.trimIndent()
 
     private fun chartPythonCode(prompt: String): String {
@@ -256,7 +283,13 @@ data class ArtifactIntent(
                     plt.ylabel('Value')
                     plt.xticks(rotation=30, ha='right')
                     plt.tight_layout()
-                    plt.savefig('assistant-chart.png', dpi=160)
+                    output_path = 'assistant-chart.png'
+                    plt.savefig(output_path, dpi=160)
+                    import os
+                    size = os.path.getsize(output_path)
+                    if size <= 0:
+                        raise RuntimeError('assistant-chart.png was created empty')
+                    print(f'created artifact: {output_path} ({size} bytes)')
                 """.trimIndent()
     }
 }

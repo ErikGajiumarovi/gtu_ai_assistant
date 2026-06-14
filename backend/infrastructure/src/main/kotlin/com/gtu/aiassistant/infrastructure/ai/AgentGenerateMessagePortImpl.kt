@@ -465,6 +465,7 @@ class AgentGenerateMessagePortImpl private constructor(
 
             Artifact rules:
             - If Artifact context is present, an artifact was already created by the backend before your final answer. Mention its download/open links and briefly describe what was created.
+            - When Artifact context says the file was verified, tell the user that the returned file was checked and stored successfully.
             - Do not refuse artifact creation only because source context is empty. Artifact creation is a formatting/generation task, not a factual-source lookup.
             - For a user request like "create a docx report about GTU AI Assistant capabilities", use the capability list in this system prompt as valid self-context.
             - If artifact creation failed, explain the failure briefly and continue with a useful text answer.
@@ -622,7 +623,7 @@ private fun ArtifactGenerationResult?.toContextBlock(): String =
     if (this == null) {
         ""
     } else {
-        "\n\nArtifact context:\n$context\nMention the generated artifact links in the final answer."
+        "\n\nArtifact context:\n$context\nMention the generated artifact links and verification status in the final answer."
     }
 
 private fun ArtifactIntent.defaultTitle(): String =
