@@ -85,6 +85,8 @@ import com.gtu.aiassistant.domain.materials.port.output.DeleteMaterialCollection
 import com.gtu.aiassistant.domain.materials.port.output.DeleteMaterialDocumentPort
 import com.gtu.aiassistant.domain.materials.port.output.FindMaterialCollectionPort
 import com.gtu.aiassistant.domain.materials.port.output.FindMaterialDocumentPort
+import com.gtu.aiassistant.domain.materials.port.output.FindMaterialDocumentOutlinePort
+import com.gtu.aiassistant.domain.materials.port.output.FindMaterialDocumentSectionsPort
 import com.gtu.aiassistant.domain.materials.port.output.MaterialEmbeddingPort
 import com.gtu.aiassistant.domain.materials.port.output.MaterialOcrPort
 import com.gtu.aiassistant.domain.materials.port.output.MaterialObjectStoragePort
@@ -125,6 +127,8 @@ import com.gtu.aiassistant.infrastructure.persistence.materials.DeleteMaterialCh
 import com.gtu.aiassistant.infrastructure.persistence.materials.DeleteMaterialDocumentPortImpl
 import com.gtu.aiassistant.infrastructure.persistence.materials.FindMaterialCollectionPortImpl
 import com.gtu.aiassistant.infrastructure.persistence.materials.FindMaterialDocumentPortImpl
+import com.gtu.aiassistant.infrastructure.persistence.materials.FindMaterialDocumentOutlinePortImpl
+import com.gtu.aiassistant.infrastructure.persistence.materials.FindMaterialDocumentSectionsPortImpl
 import com.gtu.aiassistant.infrastructure.persistence.materials.ReplaceMaterialDocumentChunksPortImpl
 import com.gtu.aiassistant.infrastructure.persistence.materials.SaveMaterialCollectionPortImpl
 import com.gtu.aiassistant.infrastructure.persistence.materials.SaveMaterialChunksPortImpl
@@ -271,7 +275,7 @@ private fun appModule(
         )
     }
     single { GtuKnowledgeSearchTool(get()) }
-    single { UserMaterialSearchTool(get()) }
+    single { UserMaterialSearchTool(get(), get(), get(), get()) }
     single { GtuWebSearchTool(get(), get(), get()) }
 
     when (runtimeConfig.aiMode) {
@@ -385,6 +389,8 @@ private fun appModule(
             single<SaveChatPort> { InMemorySaveChatPort(get()) }
             single<DeleteChatPort> { InMemoryDeleteChatPort(get()) }
             single<FindMaterialDocumentPort> { InMemoryFindMaterialDocumentPort(get()) }
+            single<FindMaterialDocumentOutlinePort> { com.gtu.aiassistant.app.memory.InMemoryFindMaterialDocumentOutlinePort(get()) }
+            single<FindMaterialDocumentSectionsPort> { com.gtu.aiassistant.app.memory.InMemoryFindMaterialDocumentSectionsPort(get()) }
             single<SaveMaterialDocumentPort> { InMemorySaveMaterialDocumentPort(get()) }
             single<DeleteMaterialDocumentPort> { InMemoryDeleteMaterialDocumentPort(get()) }
             single<SaveMaterialChunksPort> { InMemorySaveMaterialChunksPort(get()) }
@@ -422,6 +428,8 @@ private fun appModule(
             single<SaveChatPort> { SaveChatPortImpl(get()) }
             single<DeleteChatPort> { DeleteChatPortImpl(get()) }
             single<FindMaterialDocumentPort> { FindMaterialDocumentPortImpl(get()) }
+            single<FindMaterialDocumentOutlinePort> { FindMaterialDocumentOutlinePortImpl(get()) }
+            single<FindMaterialDocumentSectionsPort> { FindMaterialDocumentSectionsPortImpl(get()) }
             single<SaveMaterialDocumentPort> { SaveMaterialDocumentPortImpl(get()) }
             single<DeleteMaterialDocumentPort> { DeleteMaterialDocumentPortImpl(get()) }
             single<SaveMaterialChunksPort> { SaveMaterialChunksPortImpl(get()) }

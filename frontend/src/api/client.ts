@@ -50,6 +50,22 @@ async function parseApiError(response: Response, defaultCode: string): Promise<A
   }
 }
 
+export function isUnauthorizedApiError(error: unknown): error is ApiClientError {
+  return error instanceof ApiClientError && error.status === 401 && error.code === "unauthorized";
+}
+
+export function handleUnauthorizedApiError(error: unknown): void {
+  if (isUnauthorizedApiError(error)) {
+    useAuthStore.getState().expireSession();
+  }
+}
+
+export async function parseAndHandleApiError(response: Response, defaultCode: string): Promise<ApiClientError> {
+  const error = await parseApiError(response, defaultCode);
+  handleUnauthorizedApiError(error);
+  return error;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   Object.entries(authHeader()).forEach(([key, value]) => headers.set(key, value));
@@ -60,7 +76,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers });
   if (!response.ok) {
-    throw await parseApiError(response, "transport_error");
+    throw await parseAndHandleApiError(response, "transport_error");
   }
 
   return (await response.json()) as T;
@@ -117,7 +133,7 @@ export function uploadMaterial(file: File, collectionId?: string | null): Promis
 export async function openAuthenticatedDownload(url: string): Promise<void> {
   const response = await fetch(apiUrl(url), { headers: authHeader() });
   if (!response.ok) {
-    throw await parseApiError(response, "download_error");
+    throw await parseAndHandleApiError(response, "download_error");
   }
 
   const blob = await response.blob();

@@ -11,8 +11,16 @@ import com.gtu.aiassistant.domain.materials.model.MaterialSearchQuery
 import com.gtu.aiassistant.domain.materials.port.output.DeleteMaterialCollectionPort
 import com.gtu.aiassistant.domain.materials.port.output.DeleteMaterialChunksPort
 import com.gtu.aiassistant.domain.materials.port.output.DeleteMaterialDocumentPort
+import com.gtu.aiassistant.domain.materials.port.output.FindMaterialDocumentOutlinePort
+import com.gtu.aiassistant.domain.materials.port.output.FindMaterialDocumentOutlineQuery
+import com.gtu.aiassistant.domain.materials.port.output.FindMaterialDocumentSectionsPort
+import com.gtu.aiassistant.domain.materials.port.output.FindMaterialDocumentSectionsQuery
 import com.gtu.aiassistant.domain.materials.port.output.FindMaterialCollectionPort
 import com.gtu.aiassistant.domain.materials.port.output.FindMaterialDocumentPort
+import com.gtu.aiassistant.domain.materials.port.output.MaterialDocumentOutline
+import com.gtu.aiassistant.domain.materials.port.output.MaterialDocumentOutlineEntry
+import com.gtu.aiassistant.domain.materials.port.output.MaterialDocumentSection
+import com.gtu.aiassistant.domain.materials.port.output.MaterialDocumentSectionChunk
 import com.gtu.aiassistant.domain.materials.port.output.ReplaceMaterialDocumentChunksPort
 import com.gtu.aiassistant.domain.materials.port.output.SaveMaterialCollectionPort
 import com.gtu.aiassistant.domain.materials.port.output.SaveMaterialChunksPort
@@ -40,6 +48,16 @@ class InMemoryFindMaterialDocumentPort(
                     document = state.materialDocuments[strategy.documentId.value.toString()]
                         ?.takeIf { it.ownerUserId == strategy.ownerUserId }
                 )
+
+                is FindMaterialDocumentPort.Strategy.ByIds -> {
+                    val ids = strategy.documentIds.map { it.value.toString() }.toSet()
+                    FindMaterialDocumentPort.Result.Multiple(
+                        documents = state.materialDocuments.values
+                            .filter { it.ownerUserId == strategy.ownerUserId }
+                            .filter { it.id.value.toString() in ids }
+                            .sortedByDescending { it.createdAt }
+                    )
+                }
 
                 is FindMaterialDocumentPort.Strategy.ByOwner -> FindMaterialDocumentPort.Result.Multiple(
                     documents = state.materialDocuments.values
@@ -171,6 +189,65 @@ class InMemoryDeleteMaterialChunksPort(
     }
 }
 
+class InMemoryFindMaterialDocumentOutlinePort(
+    private val state: InMemoryState
+) : FindMaterialDocumentOutlinePort {
+    override suspend fun invoke(query: FindMaterialDocumentOutlineQuery): Either<InfrastructureError, List<MaterialDocumentOutline>> {
+        val documentIds = query.documentIds.toSet()
+        val outlines = state.materialChunks.values
+            .asSequence()
+            .filter { chunk -> chunk.ownerUserId == query.ownerUserId }
+            .filter { chunk -> chunk.documentId in documentIds }
+            .sortedBy { chunk -> chunk.chunkIndex }
+            .groupBy { chunk -> chunk.documentId }
+            .map { (documentId, chunks) ->
+                MaterialDocumentOutline(
+                    documentId = documentId,
+                    entries = chunks.toOutlineEntries().take(query.maxEntriesPerDocument.coerceIn(1, 120))
+                )
+            }
+        return Either.Right(outlines)
+    }
+}
+
+class InMemoryFindMaterialDocumentSectionsPort(
+    private val state: InMemoryState
+) : FindMaterialDocumentSectionsPort {
+    override suspend fun invoke(query: FindMaterialDocumentSectionsQuery): Either<InfrastructureError, List<MaterialDocumentSection>> {
+        val documentIds = query.documentIds.toSet()
+        val sections = query.sectionTitles
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .flatMap { sectionTitle ->
+                state.materialChunks.values
+                    .asSequence()
+                    .filter { chunk -> chunk.ownerUserId == query.ownerUserId }
+                    .filter { chunk -> chunk.documentId in documentIds }
+                    .filter { chunk -> chunk.headingPath?.containsSectionTitle(sectionTitle) == true }
+                    .sortedBy { chunk -> chunk.chunkIndex }
+                    .groupBy { chunk -> chunk.documentId }
+                    .map { (documentId, chunks) ->
+                        MaterialDocumentSection(
+                            documentId = documentId,
+                            title = sectionTitle,
+                            chunks = chunks
+                                .take(query.maxChunksPerSection.coerceIn(1, 5))
+                                .map { chunk ->
+                                    MaterialDocumentSectionChunk(
+                                        text = chunk.text,
+                                        headingPath = chunk.headingPath,
+                                        pageStart = chunk.pageStart,
+                                        pageEnd = chunk.pageEnd
+                                    )
+                                }
+                        )
+                    }
+            }
+        return Either.Right(sections)
+    }
+}
+
 class InMemorySearchUserMaterialsPort(
     private val state: InMemoryState
 ) : SearchUserMaterialsPort {
@@ -244,6 +321,68 @@ private fun String.searchTokens(): Set<String> =
 private fun String.toSnippet(): String {
     val normalized = replace(Regex("\\s+"), " ").trim()
     return if (normalized.length <= 700) normalized else normalized.take(697).trimEnd() + "..."
+}
+
+private fun List<MaterialChunk>.toOutlineEntries(): List<MaterialDocumentOutlineEntry> {
+    val seen = linkedSetOf<String>()
+    val entries = mutableListOf<MaterialDocumentOutlineEntry>()
+
+    for (chunk in this) {
+        val tocEntry = chunk.text.toTocOutlineEntry()
+        if (tocEntry != null && seen.add(tocEntry.title.normalizedOutlineKey())) {
+            entries += tocEntry
+        }
+
+        chunk.headingPath
+            ?.split(">")
+            ?.map { it.trim() }
+            ?.filter { it.isNotBlank() }
+            ?.forEachIndexed { index, heading ->
+                val entry = MaterialDocumentOutlineEntry(heading.toDisplayHeading(), index + 1)
+                if (seen.add(entry.title.normalizedOutlineKey())) {
+                    entries += entry
+                }
+            }
+    }
+
+    return entries
+}
+
+private fun String.toTocOutlineEntry(): MaterialDocumentOutlineEntry? {
+    val normalized = replace(Regex("\\s+"), " ").trim()
+    if (normalized.length !in 3..160) return null
+    if (normalized.contains("http", ignoreCase = true)) return null
+    if (normalized.contains("{") || normalized.contains(";")) return null
+
+    val withoutPage = normalized.replace(Regex("\\s+\\d{1,4}$"), "").trim()
+    val level = when {
+        withoutPage.equals("введение", ignoreCase = true) -> 1
+        withoutPage.equals("заключение", ignoreCase = true) -> 1
+        withoutPage.matches(Regex("""(?i)^глава\s+\d+.*""")) -> 1
+        withoutPage.matches(Regex("""^\d+\.\s+\S.*""")) -> 1
+        withoutPage.matches(Regex("""^\d+(\.\d+)+\.\s+\S.*""")) -> withoutPage
+            .substringBefore(' ')
+            .count { it == '.' }
+            .coerceAtLeast(2)
+        else -> return null
+    }
+
+    return MaterialDocumentOutlineEntry(withoutPage.toDisplayHeading(), level)
+}
+
+private fun String.toDisplayHeading(): String =
+    replace(Regex("\\s+"), " ").trim()
+
+private fun String.normalizedOutlineKey(): String =
+    lowercase().replace(Regex("\\s+"), " ").trim()
+
+private fun String.containsSectionTitle(sectionTitle: String): Boolean {
+    val normalizedHeading = normalizedOutlineKey()
+    val normalizedTitle = sectionTitle.normalizedOutlineKey()
+    val titleWithoutNumber = normalizedTitle.replace(Regex("""^\d+(\.\d+)*\.?\s+"""), "")
+
+    return normalizedHeading.contains(normalizedTitle) ||
+        (titleWithoutNumber.length >= 6 && normalizedHeading.contains(titleWithoutNumber))
 }
 
 private val SEARCH_TOKEN_REGEX = Regex("""[\p{L}\p{N}]+""")

@@ -17,3 +17,47 @@ fun interface ReplaceMaterialDocumentChunksPort {
 fun interface DeleteMaterialChunksPort {
     suspend operator fun invoke(ownerUserId: UserId, documentId: MaterialDocumentId): Either<InfrastructureError, Unit>
 }
+
+fun interface FindMaterialDocumentOutlinePort {
+    suspend operator fun invoke(query: FindMaterialDocumentOutlineQuery): Either<InfrastructureError, List<MaterialDocumentOutline>>
+}
+
+fun interface FindMaterialDocumentSectionsPort {
+    suspend operator fun invoke(query: FindMaterialDocumentSectionsQuery): Either<InfrastructureError, List<MaterialDocumentSection>>
+}
+
+data class FindMaterialDocumentOutlineQuery(
+    val ownerUserId: UserId,
+    val documentIds: List<MaterialDocumentId>,
+    val maxEntriesPerDocument: Int = 40
+)
+
+data class MaterialDocumentOutline(
+    val documentId: MaterialDocumentId,
+    val entries: List<MaterialDocumentOutlineEntry>
+)
+
+data class MaterialDocumentOutlineEntry(
+    val title: String,
+    val level: Int?
+)
+
+data class FindMaterialDocumentSectionsQuery(
+    val ownerUserId: UserId,
+    val documentIds: List<MaterialDocumentId>,
+    val sectionTitles: List<String>,
+    val maxChunksPerSection: Int = 2
+)
+
+data class MaterialDocumentSection(
+    val documentId: MaterialDocumentId,
+    val title: String,
+    val chunks: List<MaterialDocumentSectionChunk>
+)
+
+data class MaterialDocumentSectionChunk(
+    val text: String,
+    val headingPath: String?,
+    val pageStart: Int?,
+    val pageEnd: Int?
+)

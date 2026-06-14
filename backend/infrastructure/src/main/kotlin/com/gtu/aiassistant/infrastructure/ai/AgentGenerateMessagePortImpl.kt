@@ -24,6 +24,7 @@ import com.gtu.aiassistant.domain.user.model.UserId
 import com.gtu.aiassistant.infrastructure.ai.tools.AgentSource
 import com.gtu.aiassistant.infrastructure.ai.tools.GtuKnowledgeSearchTool
 import com.gtu.aiassistant.infrastructure.ai.tools.GtuWebSearchTool
+import com.gtu.aiassistant.infrastructure.ai.tools.UserMaterialContext
 import com.gtu.aiassistant.infrastructure.ai.tools.UserMaterialSearchTool
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
@@ -138,17 +139,34 @@ class AgentGenerateMessagePortImpl private constructor(
         } else {
             emptyList()
         }
-        val materialSources = if (command.sources.materials) {
+        val materialContext = if (command.sources.materials) {
             onStatus(GenerateMessageStreamStatus("materials_search", "Checking uploaded materials..."))
-            userMaterialSearchTool.search(
+            userMaterialSearchTool.resolve(
                 ownerUserId = command.userId,
                 query = latestUserText,
                 collectionIds = command.collectionIds,
                 documentIds = command.documentIds
-            ).fold(ifLeft = { emptyList() }, ifRight = { it })
+            ).fold(
+                ifLeft = { error ->
+                    logger.warn(
+                        "Uploaded material context resolution failed userId={} collectionCount={} documentCount={}",
+                        command.userId.value,
+                        command.collectionIds.size,
+                        command.documentIds.size,
+                        error.cause
+                    )
+                    UserMaterialContext(
+                        documents = emptyList(),
+                        sources = emptyList(),
+                        searchError = error.toMaterialContextError()
+                    )
+                },
+                ifRight = { it }
+            )
         } else {
-            emptyList()
+            null
         }
+        val materialSources = materialContext?.sources.orEmpty()
         val bestLocalScore = (gtuSources + materialSources).maxOfOrNull { it.score }
         val shouldSearchWeb = command.sources.web &&
             (bestLocalScore == null || bestLocalScore < MIN_RAG_CONFIDENCE || latestUserText.isTimeSensitive())
@@ -182,6 +200,7 @@ class AgentGenerateMessagePortImpl private constructor(
             userId = command.userId,
             sourceSelection = command.sources,
             sources = sources,
+            materialContext = materialContext,
             artifactIntent = artifactIntent,
             artifactGeneration = null
         )
@@ -459,13 +478,13 @@ class AgentGenerateMessagePortImpl private constructor(
 private fun List<AgentSource>.toContextBlock(): String =
     if (isEmpty()) {
         """
-        Source context:
-        No allowed source context was found for this message.
-        If the user asks for factual information that requires sources, explicitly state that it could not be confirmed from the allowed sources.
+        Source excerpt context:
+        No relevant source excerpts were found for this message.
+        If the user asks for factual information that requires source excerpts, explicitly state that it could not be confirmed from the allowed source excerpts.
         """.trimIndent()
     } else {
         buildString {
-            appendLine("Allowed source context:")
+            appendLine("Allowed source excerpt context:")
             this@toContextBlock.forEachIndexed { index, source ->
                 appendLine("[${index + 1}] ${source.title}")
                 appendLine("Type: ${source.sourceType}")
@@ -475,6 +494,12 @@ private fun List<AgentSource>.toContextBlock(): String =
             }
         }
     }
+
+private fun InfrastructureError.toMaterialContextError(): String =
+    cause.message
+        ?.takeIf(String::isNotBlank)
+        ?.let { "Uploaded material context could not be loaded: $it" }
+        ?: "Uploaded material context could not be loaded: ${cause::class.simpleName ?: "unknown error"}"
 
 private fun List<AgentSource>.toCitations(): List<MessageCitation> =
     distinctBy { it.url }
@@ -510,11 +535,15 @@ private data class PreparedGeneration(
     val userId: UserId,
     val sourceSelection: ChatSources,
     val sources: List<AgentSource>,
+    val materialContext: UserMaterialContext?,
     val artifactIntent: ArtifactIntent?,
     val artifactGeneration: ArtifactGenerationResult?
 ) {
     fun systemPrompt(basePrompt: String): String =
-        basePrompt + "\n\n" + sourceSelection.promptRules() + "\n\n" + sources.toContextBlock() + artifactGeneration.toContextBlock()
+        basePrompt + "\n\n" + sourceSelection.promptRules() +
+            materialContext.toContextBlock() +
+            "\n\n" + sources.toContextBlock() +
+            artifactGeneration.toContextBlock()
 
     fun artifactDraftPrompt(intent: ArtifactIntent): String =
         """
@@ -532,9 +561,62 @@ private data class PreparedGeneration(
         For factual claims about GTU, rely only on the allowed source context below. If the context is insufficient, include a clear note that the information could not be fully confirmed from the allowed sources.
         Do not invent deadlines, prices, contacts, rules, or personal student data.
 
+        ${materialContext.toContextBlock()}
+
         ${sources.toContextBlock()}
         """.trimIndent()
 }
+
+private fun UserMaterialContext?.toContextBlock(): String {
+    if (this == null) return ""
+
+    return buildString {
+        appendLine()
+        appendLine()
+        appendLine("Uploaded material inventory:")
+        if (documents.isEmpty()) {
+            appendLine("No uploaded materials match the selected filters.")
+        } else {
+            documents.take(MAX_MATERIAL_CONTEXT_DOCUMENTS).forEachIndexed { index, document ->
+                append("- [M${index + 1}] ${document.title}")
+                append(" (file: ${document.originalFileName}; id: ${document.id.value}; status: ${document.ingestionStatus.name})")
+                document.ingestionError?.takeIf(String::isNotBlank)?.let { error ->
+                    append(" error: ${error.take(MAX_MATERIAL_ERROR_CONTEXT_LENGTH)}")
+                }
+                appendLine()
+                if (document.outline.isNotEmpty()) {
+                    appendLine("  Document outline:")
+                    document.outline.take(MAX_MATERIAL_OUTLINE_CONTEXT_ENTRIES).forEach { entry ->
+                        val indent = "  ".repeat((entry.level ?: 1).coerceIn(1, 4))
+                        appendLine("$indent- ${entry.title}")
+                    }
+                    if (document.outline.size > MAX_MATERIAL_OUTLINE_CONTEXT_ENTRIES) {
+                        appendLine("  - ${document.outline.size - MAX_MATERIAL_OUTLINE_CONTEXT_ENTRIES} more outline entries are not shown.")
+                    }
+                }
+            }
+            if (documents.size > MAX_MATERIAL_CONTEXT_DOCUMENTS) {
+                appendLine("- ${documents.size - MAX_MATERIAL_CONTEXT_DOCUMENTS} more uploaded materials are not shown.")
+            }
+        }
+
+        val readyCount = documents.count { it.ingestionStatus.name == "READY" }
+        val notReadyCount = documents.size - readyCount
+        appendLine("READY uploaded materials can be used for content answers. Non-READY materials are listed only as upload/status metadata.")
+        if (notReadyCount > 0) {
+            appendLine("$notReadyCount selected/uploaded material(s) are not READY and must not be used for factual content claims.")
+        }
+        if (searchError != null) {
+            appendLine(searchError)
+        } else if (documents.isNotEmpty() && sources.isEmpty()) {
+            appendLine("No relevant excerpts were found in READY uploaded materials for the latest message. You may answer questions about which uploaded materials are available from this inventory, but do not make detailed claims about their contents without excerpts.")
+        }
+    }
+}
+
+private const val MAX_MATERIAL_CONTEXT_DOCUMENTS = 12
+private const val MAX_MATERIAL_OUTLINE_CONTEXT_ENTRIES = 50
+private const val MAX_MATERIAL_ERROR_CONTEXT_LENGTH = 240
 
 private fun ArtifactGenerationResult?.toContextBlock(): String =
     if (this == null) {

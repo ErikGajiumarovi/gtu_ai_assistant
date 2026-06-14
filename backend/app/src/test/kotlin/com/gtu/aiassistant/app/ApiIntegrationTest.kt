@@ -350,7 +350,12 @@ private fun realAgentGenerateMessagePort(): GenerateMessagePort {
     return AgentGenerateMessagePortImpl.create(
         config = aiConfig,
         knowledgeSearchTool = GtuKnowledgeSearchTool(DisabledSearchKnowledgePort()),
-        userMaterialSearchTool = UserMaterialSearchTool(InMemorySearchUserMaterialsPort(state)),
+        userMaterialSearchTool = UserMaterialSearchTool(
+            searchUserMaterialsPort = InMemorySearchUserMaterialsPort(state),
+            findMaterialDocumentPort = InMemoryFindMaterialDocumentPort(state),
+            findMaterialDocumentOutlinePort = com.gtu.aiassistant.app.memory.InMemoryFindMaterialDocumentOutlinePort(state),
+            findMaterialDocumentSectionsPort = com.gtu.aiassistant.app.memory.InMemoryFindMaterialDocumentSectionsPort(state)
+        ),
         webSearchTool = GtuWebSearchTool(
             config = WebSearchConfig(mode = WebSearchMode.DISABLED, allowedDomains = setOf("gtu.ge"), maxResults = 1),
             urlPolicy = GtuUrlPolicy(setOf("gtu.ge")),

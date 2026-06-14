@@ -1,5 +1,5 @@
 import { useAuthStore } from "../state/authStore";
-import { ApiClientError } from "./client";
+import { ApiClientError, parseAndHandleApiError } from "./client";
 import type { ChatResponse, CreateChatWithAgentRequest } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -33,8 +33,7 @@ export async function streamChat(
   });
 
   if (!response.ok) {
-    const text = await response.text();
-    throw new ApiClientError(text || `HTTP ${response.status}`, "stream_error", response.status);
+    throw await parseAndHandleApiError(response, "stream_error");
   }
 
   if (!response.body) {

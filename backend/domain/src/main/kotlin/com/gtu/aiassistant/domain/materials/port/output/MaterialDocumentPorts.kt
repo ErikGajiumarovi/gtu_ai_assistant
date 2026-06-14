@@ -21,6 +21,11 @@ fun interface FindMaterialDocumentPort {
             val documentId: MaterialDocumentId
         ) : Strategy
 
+        data class ByIds(
+            val ownerUserId: UserId,
+            val documentIds: List<MaterialDocumentId>
+        ) : Strategy
+
         data class ByOwner(
             val ownerUserId: UserId,
             val collectionId: MaterialCollectionId? = null

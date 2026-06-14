@@ -22,6 +22,7 @@ import {
   createMaterialCollection,
   deleteMaterial,
   deleteMaterialCollection,
+  isUnauthorizedApiError,
   listChats,
   listMaterialCollections,
   listMaterials,
@@ -55,7 +56,7 @@ const defaultSources: AgentSources = { gtu: true, materials: true, web: false };
 
 export function App() {
   const queryClient = useQueryClient();
-  const { session, setSession, logout } = useAuthStore();
+  const { session, authExpired, setSession, logout, acknowledgeSessionExpired } = useAuthStore();
   const [notice, setNotice] = useState<Notice | null>(null);
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [registeredUser, setRegisteredUser] = useState<UserResponse | null>(null);
@@ -128,6 +129,19 @@ export function App() {
   });
 
   useEffect(() => {
+    if (!authExpired) return;
+
+    streamAbortRef.current?.abort();
+    setAuthMode("login");
+    setNotice({
+      tone: "info",
+      title: "Session expired",
+      detail: "Please sign in again to continue."
+    });
+    acknowledgeSessionExpired();
+  }, [acknowledgeSessionExpired, authExpired]);
+
+  useEffect(() => {
     if (!session) {
       setSelectedChatId("");
       setPendingUserText("");
@@ -146,6 +160,16 @@ export function App() {
   const collections = collectionsQuery.data ?? [];
   const selectedChat = chats.find((chat) => chat.id === selectedChatId) ?? null;
   const filteredChats = filterChats(chats, chatSearch);
+
+  useEffect(() => {
+    if (!session || !hasPendingMaterials(materials)) return;
+
+    const intervalId = window.setInterval(() => {
+      void queryClient.invalidateQueries({ queryKey: ["materials"] });
+    }, 2500);
+
+    return () => window.clearInterval(intervalId);
+  }, [materials, queryClient, session]);
 
   async function handleSubmit(text: string) {
     const trimmed = text.trim();
@@ -202,6 +226,7 @@ export function App() {
 
   function handleLogout() {
     streamAbortRef.current?.abort();
+    setNotice(null);
     logout();
   }
 
@@ -684,17 +709,27 @@ function MaterialRow({
   onDownload: (material: MaterialResponse) => void;
   onDelete: (material: MaterialResponse) => void;
 }) {
+  const isReady = material.ingestionStatus === "READY";
+
   return (
     <article className="material-row">
       <label>
-        <input type="checkbox" checked={selected} onChange={(event) => onToggle(material.id, event.target.checked)} />
+        <input
+          type="checkbox"
+          checked={selected}
+          disabled={!isReady}
+          title={isReady ? "Ready for agent answers" : "Material is not ready for agent answers yet"}
+          onChange={(event) => onToggle(material.id, event.target.checked)}
+        />
         <div>
           <strong>{material.originalFileName || material.title}</strong>
           <small>
-            {material.ingestionStatus} · {formatBytes(material.sizeBytes)} · {formatShortDate(material.createdAt)}
+            {material.ingestionStatus} · {formatBytes(material.sizeBytes)} · {formatShortDate(material.createdAt)} ·{" "}
+            {isReady ? "Available to agent" : "Not available to agent yet"}
           </small>
         </div>
       </label>
+      {!isReady && !material.ingestionError && <p className="material-meta">Only READY materials are used in answers.</p>}
       {material.ingestionError && <p className="material-error">{material.ingestionError}</p>}
       {material.ocrMetadata && <p className="material-meta">OCR: {material.ocrMetadata}</p>}
       <div className="material-actions">
@@ -1041,6 +1076,15 @@ function NoticeBanner({ notice, onDismiss }: { notice: Notice; onDismiss: () => 
 }
 
 function showError(title: string, error: unknown, setNotice: (notice: Notice) => void): void {
+  if (isUnauthorizedApiError(error)) {
+    setNotice({
+      tone: "info",
+      title: "Session expired",
+      detail: "Please sign in again to continue."
+    });
+    return;
+  }
+
   if (error instanceof ApiClientError) {
     setNotice({ tone: "error", title, detail: `${error.code}: ${stripHtml(error.message)}` });
     return;
@@ -1118,6 +1162,10 @@ function hostname(url: string): string {
 
 function hasAnySource(sources: AgentSources): boolean {
   return sources.gtu || sources.materials || sources.web;
+}
+
+function hasPendingMaterials(materials: MaterialResponse[]): boolean {
+  return materials.some((material) => material.ingestionStatus === "UPLOADED" || material.ingestionStatus === "PROCESSING");
 }
 
 function toggleValue(current: Set<string>, value: string, checked: boolean): Set<string> {

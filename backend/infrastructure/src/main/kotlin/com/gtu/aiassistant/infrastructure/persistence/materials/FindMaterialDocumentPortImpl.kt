@@ -5,6 +5,7 @@ import com.gtu.aiassistant.infrastructure.persistence.support.JdbcPersistenceExe
 import org.jetbrains.exposed.v1.core.SortOrder
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
+import org.jetbrains.exposed.v1.core.inList
 import org.jetbrains.exposed.v1.jdbc.selectAll
 
 class FindMaterialDocumentPortImpl(
@@ -23,6 +24,24 @@ class FindMaterialDocumentPortImpl(
                         .singleOrNull()
                         ?.toDomainMaterialDocument()
                 )
+
+                is FindMaterialDocumentPort.Strategy.ByIds -> {
+                    val documentIds = strategy.documentIds.map { it.value.toString() }.distinct()
+                    FindMaterialDocumentPort.Result.Multiple(
+                        documents = if (documentIds.isEmpty()) {
+                            emptyList()
+                        } else {
+                            MaterialDocumentRecords.table
+                                .selectAll()
+                                .where {
+                                    (MaterialDocumentRecords.ownerUserId eq strategy.ownerUserId.value.toString()) and
+                                        (MaterialDocumentRecords.id inList documentIds)
+                                }
+                                .orderBy(MaterialDocumentRecords.createdAt to SortOrder.DESC)
+                                .map { it.toDomainMaterialDocument() }
+                        }
+                    )
+                }
 
                 is FindMaterialDocumentPort.Strategy.ByOwner -> FindMaterialDocumentPort.Result.Multiple(
                     documents = MaterialDocumentRecords.table

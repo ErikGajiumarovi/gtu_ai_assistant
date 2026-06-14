@@ -27,20 +27,32 @@ class SearchUserMaterialsPortImpl(
             val queryEmbedding = embeddingPort(normalizedQuery).bind()
             val maxResults = query.maxResults.coerceIn(1, 20)
             val candidateLimit = (maxResults * 4).coerceIn(maxResults, 80)
-            val queryTokens = normalizedQuery.searchTokens()
+            val signals = buildMaterialQuerySignals(normalizedQuery)
 
             executor.execute {
-                val candidates = selectCandidates(
-                    query = query,
-                    queryEmbedding = queryEmbedding,
-                    limit = candidateLimit
-                )
+                val candidates = (
+                    selectVectorCandidates(
+                        query = query,
+                        queryEmbedding = queryEmbedding,
+                        limit = candidateLimit
+                    ) + selectLexicalCandidates(
+                        query = query,
+                        queryEmbedding = queryEmbedding,
+                        signals = signals,
+                        limit = candidateLimit
+                    )
+                ).distinctBy { it.chunkId }
 
                 candidates
                     .asSequence()
                     .map { candidate ->
-                        val lexicalScore = lexicalScore(queryTokens, candidate.title, candidate.text, candidate.headingPath)
-                        val finalScore = (candidate.vectorScore * 0.85 + lexicalScore * 0.15).coerceIn(0.0, 1.0)
+                        val finalScore = scoreMaterialCandidate(
+                            signals = signals,
+                            vectorScore = candidate.vectorScore,
+                            title = candidate.title,
+                            text = candidate.text,
+                            headingPath = candidate.headingPath
+                        )
                         candidate.toHit(score = finalScore)
                     }
                     .filter { hit -> hit.score >= query.minScore }
@@ -50,26 +62,67 @@ class SearchUserMaterialsPortImpl(
             }.bind()
         }
 
-    private fun selectCandidates(
+    private fun selectVectorCandidates(
         query: MaterialSearchQuery,
         queryEmbedding: List<Float>,
         limit: Int
+    ): List<MaterialSearchCandidate> =
+        runCandidateQuery(
+            sql = buildString {
+                append(candidateSelectSql(queryEmbedding))
+                append(candidateWhereSql(query))
+                append("\nORDER BY c.embedding <=> '${queryEmbedding.toVectorLiteral()}'::vector")
+                append("\nLIMIT $limit")
+            }
+        )
+
+    private fun selectLexicalCandidates(
+        query: MaterialSearchQuery,
+        queryEmbedding: List<Float>,
+        signals: MaterialQuerySignals,
+        limit: Int
     ): List<MaterialSearchCandidate> {
+        if (!signals.hasLexicalSignal) return emptyList()
+
+        val lexicalConditions = signals.keywordTokens
+            .flatMap { token -> token.toSqlLikePatterns() }
+            .distinct()
+            .joinToString(separator = "\n  OR ") { pattern ->
+                "d.title ILIKE '$pattern' OR c.heading_path ILIKE '$pattern' OR c.text ILIKE '$pattern'"
+            }
+
+        return runCandidateQuery(
+            sql = buildString {
+                append(candidateSelectSql(queryEmbedding))
+                append(candidateWhereSql(query))
+                append("\n  AND ($lexicalConditions)")
+                append("\nORDER BY c.chunk_index ASC")
+                append("\nLIMIT $limit")
+            }
+        )
+    }
+
+    private fun candidateSelectSql(queryEmbedding: List<Float>): String =
+        """
+        SELECT
+            c.id AS chunk_id,
+            c.document_id,
+            c.collection_id,
+            d.title,
+            c.text,
+            c.heading_path,
+            c.page_start,
+            c.page_end,
+            (1 - (c.embedding <=> '${queryEmbedding.toVectorLiteral()}'::vector)) AS vector_score
+        FROM material_chunks c
+        INNER JOIN material_documents d ON d.id = c.document_id
+        """.trimIndent()
+
+    private fun candidateWhereSql(query: MaterialSearchQuery): String {
         val sql = buildString {
             append(
                 """
-                SELECT
-                    c.id AS chunk_id,
-                    c.document_id,
-                    c.collection_id,
-                    d.title,
-                    c.text,
-                    c.heading_path,
-                    c.page_start,
-                    c.page_end,
-                    (1 - (c.embedding <=> '${queryEmbedding.toVectorLiteral()}'::vector)) AS vector_score
-                FROM material_chunks c
-                INNER JOIN material_documents d ON d.id = c.document_id
+
                 WHERE c.owner_user_id = '${query.ownerUserId.value}'
                   AND d.owner_user_id = '${query.ownerUserId.value}'
                   AND d.ingestion_status = '${MaterialIngestionStatus.READY.name}'
@@ -81,10 +134,12 @@ class SearchUserMaterialsPortImpl(
             if (query.documentIds.isNotEmpty()) {
                 append("\n  AND c.document_id IN (${query.documentIds.joinDocumentSqlUuidList()})")
             }
-            append("\nORDER BY c.embedding <=> '${queryEmbedding.toVectorLiteral()}'::vector")
-            append("\nLIMIT $limit")
         }
 
+        return sql
+    }
+
+    private fun runCandidateQuery(sql: String): List<MaterialSearchCandidate> {
         return TransactionManager.current().exec(sql) { resultSet ->
             val candidates = mutableListOf<MaterialSearchCandidate>()
             while (resultSet.next()) {
@@ -143,40 +198,24 @@ private fun List<MaterialCollectionId>.joinCollectionSqlUuidList(): String =
 private fun List<MaterialDocumentId>.joinDocumentSqlUuidList(): String =
     joinToString { id -> "'${id.value}'" }
 
+private fun String.toSqlLikePatterns(): List<String> {
+    val escaped = replace("'", "''")
+    val stem = take(PREFIX_SQL_MATCH_LENGTH).takeIf { length > PREFIX_SQL_MATCH_LENGTH }
+    return listOfNotNull(
+        "%$escaped%",
+        stem?.let { "%${it.replace("'", "''")}%" }
+    )
+}
+
 private fun List<Float>.toVectorLiteral(): String =
     joinToString(prefix = "[", postfix = "]") { value ->
         val safeValue = if (value.isFinite()) value else 0.0f
         String.format(Locale.US, "%.8f", safeValue)
     }
 
-private fun lexicalScore(queryTokens: Set<String>, title: String, text: String, headingPath: String?): Double {
-    if (queryTokens.isEmpty()) return 0.0
-
-    val titleTokens = title.searchTokens()
-    val headingTokens = headingPath.orEmpty().searchTokens()
-    val textTokens = text.searchTokens()
-
-    val titleOverlap = overlapRatio(queryTokens, titleTokens)
-    val headingOverlap = overlapRatio(queryTokens, headingTokens)
-    val textOverlap = overlapRatio(queryTokens, textTokens)
-
-    return (textOverlap * 0.70 + titleOverlap * 0.20 + headingOverlap * 0.10).coerceIn(0.0, 1.0)
-}
-
-private fun overlapRatio(queryTokens: Set<String>, targetTokens: Set<String>): Double {
-    if (queryTokens.isEmpty() || targetTokens.isEmpty()) return 0.0
-    return queryTokens.count { token -> token in targetTokens }.toDouble() / queryTokens.size
-}
-
-private fun String.searchTokens(): Set<String> =
-    SEARCH_TOKEN_REGEX.findAll(lowercase())
-        .map { match -> match.value }
-        .filterNot { token -> token.length <= 1 }
-        .toSet()
-
 private fun String.toSnippet(): String {
     val normalized = replace(Regex("\\s+"), " ").trim()
     return if (normalized.length <= 700) normalized else normalized.take(697).trimEnd() + "..."
 }
 
-private val SEARCH_TOKEN_REGEX = Regex("""[\p{L}\p{N}]+""")
+private const val PREFIX_SQL_MATCH_LENGTH = 6

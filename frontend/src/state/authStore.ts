@@ -12,7 +12,10 @@ export type SessionState = z.infer<typeof sessionSchema>;
 
 interface AuthState {
   session: SessionState | null;
+  authExpired: boolean;
   setSession: (session: SessionState) => void;
+  expireSession: () => void;
+  acknowledgeSessionExpired: () => void;
   logout: () => void;
 }
 
@@ -30,12 +33,20 @@ function loadSession(): SessionState | null {
 
 export const useAuthStore = create<AuthState>((set) => ({
   session: loadSession(),
+  authExpired: false,
   setSession: (session) => {
     localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-    set({ session });
+    set({ session, authExpired: false });
+  },
+  expireSession: () => {
+    localStorage.removeItem(SESSION_KEY);
+    set({ session: null, authExpired: true });
+  },
+  acknowledgeSessionExpired: () => {
+    set({ authExpired: false });
   },
   logout: () => {
     localStorage.removeItem(SESSION_KEY);
-    set({ session: null });
+    set({ session: null, authExpired: false });
   }
 }));
