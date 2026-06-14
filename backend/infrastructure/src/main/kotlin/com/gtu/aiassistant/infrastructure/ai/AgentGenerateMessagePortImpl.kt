@@ -18,6 +18,7 @@ import ai.koog.prompt.dsl.prompt
 import ai.koog.prompt.executor.clients.openai.OpenAIChatParams
 import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
+import ai.koog.prompt.executor.clients.openai.base.models.ReasoningEffort
 import ai.koog.prompt.executor.llms.RoundRobinRouter
 import ai.koog.prompt.executor.llms.RoutingLLMPromptExecutor
 import ai.koog.prompt.llm.LLMCapability
@@ -25,8 +26,10 @@ import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
 import ai.koog.prompt.streaming.StreamFrame
 import arrow.core.Either
+import arrow.core.left
 import arrow.core.raise.either
 import arrow.core.raise.ensure
+import arrow.core.right
 import com.gtu.aiassistant.domain.artifacts.model.MessageArtifact
 import com.gtu.aiassistant.domain.chat.model.Message as DomainMessage
 import ai.koog.prompt.message.Message as KoogMessage
@@ -52,7 +55,7 @@ import java.time.Instant
 import java.util.UUID
 
 class AgentGenerateMessagePortImpl private constructor(
-    private val executor: RoutingLLMPromptExecutor,
+    private val executors: List<RoutingLLMPromptExecutor>,
     private val model: LLModel,
     private val knowledgeSearchTool: GtuKnowledgeSearchTool,
     private val userMaterialSearchTool: UserMaterialSearchTool,
@@ -131,6 +134,19 @@ class AgentGenerateMessagePortImpl private constructor(
         onStatus: suspend (GenerateMessageStreamStatus) -> Unit = {}
     ): Either<InfrastructureError, AgentRunResult> = either {
         onStatus(GenerateMessageStreamStatus("thinking", "Preparing agent tools..."))
+        val conversation = buildAgentConversation(command, validMessages)
+        executeWithApiKeyFailover { executor ->
+            runAgentOnce(command, conversation, executor, onToken, onStatus)
+        }.bind()
+    }
+
+    private suspend fun runAgentOnce(
+        command: GenerateMessageCommand,
+        conversation: AgentConversation,
+        executor: RoutingLLMPromptExecutor,
+        onToken: suspend (String) -> Unit,
+        onStatus: suspend (GenerateMessageStreamStatus) -> Unit
+    ): AgentRunResult {
         val runtime = AgentToolRuntime(
             command = command,
             knowledgeSearchTool = knowledgeSearchTool,
@@ -139,7 +155,6 @@ class AgentGenerateMessagePortImpl private constructor(
             artifactService = artifactService,
             maxSources = MAX_SOURCES
         )
-        val conversation = buildAgentConversation(command, validMessages)
         val agent = createToolCallingAgent(
             conversation = conversation,
             toolRegistry = runtime.toolRegistry(),
@@ -149,22 +164,17 @@ class AgentGenerateMessagePortImpl private constructor(
         )
 
         val generatedText = try {
-            Either.catch {
-                agent.run(conversation.userMessage)
-            }.mapLeft { cause ->
-                logger.warn("AI agent generation failed model={}", model.id, cause)
-                InfrastructureError(cause)
-            }.bind().trim()
+            agent.run(conversation.userMessage).trim()
         } finally {
             agent.close()
         }
 
-        ensure(generatedText.isNotBlank()) {
+        if (generatedText.isBlank()) {
             logger.warn("AI agent returned blank text model={}", model.id)
-            InfrastructureError(cause = IllegalStateException("LLM response is blank"))
+            throw IllegalStateException("LLM response is blank")
         }
 
-        AgentRunResult(
+        return AgentRunResult(
             generatedText = generatedText,
             sources = runtime.sourcesSnapshot(),
             artifacts = runtime.artifactsSnapshot()
@@ -180,7 +190,10 @@ class AgentGenerateMessagePortImpl private constructor(
         val userMessage = windowedMessages.last().originalText
         val historyPrompt = prompt(
             id = "generate-gtu-agent-message",
-            params = OpenAIChatParams(parallelToolCalls = true)
+            params = OpenAIChatParams(
+                parallelToolCalls = true,
+                reasoningEffort = ReasoningEffort.MEDIUM
+            )
         ) {
             system(command.sources.agentSystemPrompt())
             historyMessages.forEach { message ->
@@ -304,6 +317,26 @@ class AgentGenerateMessagePortImpl private constructor(
         )
     }
 
+    private suspend fun <T> executeWithApiKeyFailover(
+        block: suspend (RoutingLLMPromptExecutor) -> T
+    ): Either<InfrastructureError, T> {
+        var lastError: Throwable? = null
+        executors.forEachIndexed { index, executor ->
+            when (val result = Either.catch { block(executor) }) {
+                is Either.Right -> return result.value.right()
+                is Either.Left -> {
+                    lastError = result.value
+                    if (!result.value.isAiKeyFailoverError() || index == executors.lastIndex) {
+                        logger.warn("AI generation failed model={} apiKeyAttempt={}", model.id, index + 1, result.value)
+                        return InfrastructureError(result.value).left()
+                    }
+                    logger.warn("AI API key failed with retryable auth/quota error model={} apiKeyAttempt={}, trying next key", model.id, index + 1)
+                }
+            }
+        }
+        return InfrastructureError(lastError ?: IllegalStateException("No AI API keys configured")).left()
+    }
+
     companion object {
         fun create(
             config: AiConfig,
@@ -312,18 +345,19 @@ class AgentGenerateMessagePortImpl private constructor(
             webSearchTool: GtuWebSearchTool,
             artifactService: AgentArtifactService? = null
         ): AgentGenerateMessagePortImpl {
-            val client = HttpClient(CIO)
+            val baseClient = HttpClient(CIO)
             val apiKeys = config.normalizedApiKeys()
-            val clients = apiKeys.map { apiKey ->
-                OpenAILLMClient(
+            val executors = apiKeys.map { apiKey ->
+                val llmClient = OpenAILLMClient(
                     apiKey = apiKey,
                     settings = OpenAIClientSettings(baseUrl = config.baseUrl),
-                    baseClient = client
+                    baseClient = baseClient
                 )
+                RoutingLLMPromptExecutor(RoundRobinRouter(listOf(llmClient)))
             }
 
             return AgentGenerateMessagePortImpl(
-                executor = RoutingLLMPromptExecutor(RoundRobinRouter(clients)),
+                executors = executors,
                 model = LLModel(
                     provider = LLMProvider.OpenAI,
                     id = config.model,

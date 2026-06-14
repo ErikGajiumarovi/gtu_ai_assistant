@@ -1,16 +1,20 @@
 package com.gtu.aiassistant.infrastructure.ai
 
 import ai.koog.prompt.dsl.prompt
+import ai.koog.prompt.executor.clients.openai.OpenAIChatParams
 import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
+import ai.koog.prompt.executor.clients.openai.base.models.ReasoningEffort
 import ai.koog.prompt.executor.llms.RoundRobinRouter
 import ai.koog.prompt.executor.llms.RoutingLLMPromptExecutor
 import ai.koog.prompt.llm.LLMCapability
 import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
 import arrow.core.Either
+import arrow.core.left
 import arrow.core.raise.either
 import arrow.core.raise.ensure
+import arrow.core.right
 import com.gtu.aiassistant.domain.chat.model.Message as DomainMessage
 import ai.koog.prompt.message.Message as KoogMessage
 import com.gtu.aiassistant.domain.chat.model.MessageSenderType
@@ -27,7 +31,7 @@ import java.time.Instant
 import java.util.UUID
 
 class GenerateMessagePortImpl private constructor(
-    private val executor: RoutingLLMPromptExecutor,
+    private val executors: List<RoutingLLMPromptExecutor>,
     private val model: LLModel
 ) : GenerateMessagePort {
 
@@ -74,7 +78,10 @@ class GenerateMessagePortImpl private constructor(
     private suspend fun commonExecute(
         validMessages: List<DomainMessage>
     ): Either<InfrastructureError, String> = either {
-        val llmPrompt = prompt("generate-chat-message") {
+        val llmPrompt = prompt(
+            id = "generate-chat-message",
+            params = OpenAIChatParams(reasoningEffort = ReasoningEffort.MEDIUM)
+        ) {
             system(SYSTEM_PROMPT)
             validMessages.takeLast(MAX_HISTORY_MESSAGES).forEach { message ->
                 when (message.senderType) {
@@ -84,9 +91,9 @@ class GenerateMessagePortImpl private constructor(
             }
         }
 
-        val rawResponse = Either.catch {
+        val rawResponse = executeWithApiKeyFailover { executor ->
             executor.execute(llmPrompt, model)
-        }.mapLeft(::InfrastructureError).bind()
+        }.bind()
 
         val generatedText = Either.catch {
             rawResponse.assistantText()
@@ -111,20 +118,39 @@ class GenerateMessagePortImpl private constructor(
         )
     }
 
+    private suspend fun <T> executeWithApiKeyFailover(
+        block: suspend (RoutingLLMPromptExecutor) -> T
+    ): Either<InfrastructureError, T> {
+        var lastError: Throwable? = null
+        executors.forEachIndexed { index, executor ->
+            when (val result = Either.catch { block(executor) }) {
+                is Either.Right -> return result.value.right()
+                is Either.Left -> {
+                    lastError = result.value
+                    if (!result.value.isAiKeyFailoverError() || index == executors.lastIndex) {
+                        return InfrastructureError(result.value).left()
+                    }
+                }
+            }
+        }
+        return InfrastructureError(lastError ?: IllegalStateException("No AI API keys configured")).left()
+    }
+
     companion object {
         fun create(config: AiConfig): GenerateMessagePortImpl {
             val baseClient = HttpClient(CIO)
             val apiKeys = config.normalizedApiKeys()
-            val clients = apiKeys.map { apiKey ->
-                OpenAILLMClient(
+            val executors = apiKeys.map { apiKey ->
+                val client = OpenAILLMClient(
                     apiKey = apiKey,
                     settings = OpenAIClientSettings(baseUrl = config.baseUrl),
                     baseClient = baseClient
                 )
+                RoutingLLMPromptExecutor(RoundRobinRouter(listOf(client)))
             }
 
             return GenerateMessagePortImpl(
-                executor = RoutingLLMPromptExecutor(RoundRobinRouter(clients)),
+                executors = executors,
                 model = LLModel(
                     provider = LLMProvider.OpenAI,
                     id = config.model,
