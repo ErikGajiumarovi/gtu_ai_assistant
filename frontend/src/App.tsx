@@ -20,6 +20,7 @@ import remarkGfm from "remark-gfm";
 import {
   ApiClientError,
   createMaterialCollection,
+  deleteChat,
   deleteMaterial,
   deleteMaterialCollection,
   downloadAuthenticatedFile,
@@ -133,6 +134,27 @@ export function App() {
       void queryClient.invalidateQueries({ queryKey: ["materials"] });
     },
     onError: (error) => showError("Delete failed", error, setNotice)
+  });
+
+  const deleteChatMutation = useMutation({
+    mutationFn: deleteChat,
+    onSuccess: (_result, chatId) => {
+      queryClient.setQueryData<ChatResponse[]>(["chats", session?.jwt], (current = []) =>
+        current.filter((chat) => chat.id !== chatId)
+      );
+      if (selectedChatId === chatId) {
+        setSelectedChatId("");
+        setPendingUserText("");
+        setStreamingText("");
+        setAgentStatus(null);
+      }
+      setNotice({
+        tone: "success",
+        title: "Chat deleted",
+        detail: "The conversation was removed."
+      });
+    },
+    onError: (error) => showError("Delete chat failed", error, setNotice)
   });
 
   useEffect(() => {
@@ -275,6 +297,7 @@ export function App() {
         isUploadingMaterial={uploadMaterialMutation.isPending}
         isLoadingCollections={collectionsQuery.isFetching}
         isSavingCollection={createCollectionMutation.isPending}
+        isDeletingChat={deleteChatMutation.isPending}
         onClose={() => setSidebarOpen(false)}
         onSelectChat={(chatId) => {
           setSelectedChatId(chatId);
@@ -292,6 +315,11 @@ export function App() {
           setSidebarOpen(false);
         }}
         onLogout={handleLogout}
+        onDeleteChat={(chat) => {
+          if (window.confirm("Delete this conversation?")) {
+            deleteChatMutation.mutate(chat.id);
+          }
+        }}
         onSearchChange={setChatSearch}
         onRefreshChats={() => void chatsQuery.refetch()}
         onRefreshMaterials={() => void materialsQuery.refetch()}
@@ -465,10 +493,12 @@ function Sidebar({
   isUploadingMaterial,
   isLoadingCollections,
   isSavingCollection,
+  isDeletingChat,
   onClose,
   onSelectChat,
   onNewChat,
   onLogout,
+  onDeleteChat,
   onSearchChange,
   onRefreshChats,
   onRefreshMaterials,
@@ -499,10 +529,12 @@ function Sidebar({
   isUploadingMaterial: boolean;
   isLoadingCollections: boolean;
   isSavingCollection: boolean;
+  isDeletingChat: boolean;
   onClose: () => void;
   onSelectChat: (chatId: string) => void;
   onNewChat: () => void;
   onLogout: () => void;
+  onDeleteChat: (chat: ChatResponse) => void;
   onSearchChange: (value: string) => void;
   onRefreshChats: () => void;
   onRefreshMaterials: () => void;
@@ -543,16 +575,22 @@ function Sidebar({
           <p className="sidebar-empty">No conversations yet</p>
         ) : (
           chats.map((chat) => (
-            <button
-              key={chat.id}
-              className={`chat-list-item ${chat.id === selectedChatId ? "selected" : ""}`}
-              type="button"
-              disabled={isStreaming}
-              onClick={() => onSelectChat(chat.id)}
-            >
-              <span>{getChatTitle(chat)}</span>
-              <small>{getChatPreview(chat)}</small>
-            </button>
+            <div key={chat.id} className={`chat-list-row ${chat.id === selectedChatId ? "selected" : ""}`}>
+              <button className="chat-list-item" type="button" disabled={isStreaming} onClick={() => onSelectChat(chat.id)}>
+                <span>{getChatTitle(chat)}</span>
+                <small>{getChatPreview(chat)}</small>
+              </button>
+              <button
+                className="chat-delete-button"
+                type="button"
+                disabled={isStreaming || isDeletingChat}
+                onClick={() => onDeleteChat(chat)}
+                aria-label={`Delete chat ${getChatTitle(chat)}`}
+                title="Delete chat"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
           ))
         )}
       </div>

@@ -286,21 +286,54 @@ button:not(:disabled) {
   flex: 1;
 }
 
-.chat-list-item {
+.chat-list-row {
   width: 100%;
   display: grid;
-  gap: 3px;
-  padding: 11px 12px;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  align-items: center;
   border-radius: 13px;
   background: transparent;
   color: rgba(255, 255, 255, 0.72);
+}
+
+.chat-list-row.selected,
+.chat-list-row:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.chat-list-item {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding: 11px 8px 11px 12px;
+  background: transparent;
+  color: inherit;
   text-align: left;
 }
 
-.chat-list-item.selected,
-.chat-list-item:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
+.chat-list-item:disabled {
+  cursor: not-allowed;
+}
+
+.chat-delete-button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.48);
+  background: transparent;
+}
+
+.chat-delete-button:hover:not(:disabled) {
+  color: #fecaca;
+  background: rgba(239, 68, 68, 0.18);
+}
+
+.chat-delete-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .chat-list-item span,
